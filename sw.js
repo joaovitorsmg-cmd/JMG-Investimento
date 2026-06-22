@@ -4,7 +4,7 @@
    Para atualizar o app depois de mudar arquivos: suba o número
    da versão em CACHE (ex.: jmg-inv-v2) e recarregue.
    ===================================================== */
-const CACHE = 'jmg-inv-v4';
+const CACHE = 'jmg-inv-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -28,8 +28,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // Cotações / indicadores (brapi) — sempre pela rede, nunca cacheia preço velho
-  if (url.includes('brapi.dev')) {
+  // Cotações / indicadores (brapi, HG Brasil) — sempre pela rede, nunca cacheia preço velho
+  if (url.includes('brapi.dev') || url.includes('hgbrasil.com')) {
     e.respondWith(
       fetch(e.request).catch(() =>
         new Response('{"results":[]}', { headers: { 'Content-Type': 'application/json' } })
