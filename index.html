@@ -196,7 +196,7 @@ tr:hover td{background:#FAFCFA}
   <section class="view" id="scanner">
     <div class="card">
       <div class="h-row"><div><div class="eyebrow">Varredura da B3</div><h2>Scanner</h2></div></div>
-      <p class="sub">Puxa um universo de ações e FIIs líquidos, busca P/L, P/VP, dividendos e 52 semanas, e ranqueia para renda passiva e para barganhas (valor).</p>
+      <p class="sub">Puxa um universo de ações líquidas, busca P/L, P/VP, dividendos, ROE e dívida/EBITDA, e ranqueia para renda passiva e para barganhas (valor) — só passam ações que rentabilizam o patrimônio e não estão endividadas demais. FIIs têm busca própria na aba ao lado.</p>
       <div class="filters">
         <div><label>Setor (ações)</label><select id="fSector"><option value="">Todos</option></select></div>
         <div><label>Universo</label><select id="fUniverse"><option value="40">40 ativos (rápido)</option><option value="60" selected>60 ativos</option><option value="80">80 ativos</option></select></div>
@@ -212,13 +212,13 @@ tr:hover td{background:#FAFCFA}
     <div class="card" id="scanRendaCard" style="display:none">
       <div class="eyebrow">Top renda passiva</div>
       <h3 style="margin:6px 0 10px;font-size:17px">Maiores dividendos (DY)</h3>
-      <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>DY%</th><th>P/VP</th><th>P/L</th><th>Status</th><th></th></tr></thead><tbody id="scanRendaBody"></tbody></table></div>
+      <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>DY%</th><th>P/VP</th><th>P/L</th><th>ROE%</th><th>Dív/EBITDA</th><th>Status</th><th></th></tr></thead><tbody id="scanRendaBody"></tbody></table></div>
     </div>
 
     <div class="card" id="scanValorCard" style="display:none">
       <div class="eyebrow">Top valor / baratas</div>
       <h3 style="margin:6px 0 10px;font-size:17px">Menor preço vs. fundamentos</h3>
-      <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>P/L</th><th>P/VP</th><th>Graham</th><th>Status</th><th></th></tr></thead><tbody id="scanValorBody"></tbody></table></div>
+      <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>P/L</th><th>P/VP</th><th>ROE%</th><th>Dív/EBITDA</th><th>Graham</th><th>Status</th><th></th></tr></thead><tbody id="scanValorBody"></tbody></table></div>
     </div>
   </section>
 
@@ -298,6 +298,9 @@ tr:hover td{background:#FAFCFA}
       <div class="cfg-row"><div class="lab">Meta de yield (Bazin)<small>Preço-teto = DPA ÷ meta. Padrão 6%.</small></div><input id="cfgBazin" type="number" step="0.5" value="6"></div>
       <div class="cfg-row"><div class="lab">DY mínimo no scanner (renda)<small>Ignora dividendos abaixo disso.</small></div><input id="cfgMinDy" type="number" step="0.5" value="5"></div>
       <div class="cfg-row"><div class="lab">P/L máximo no scanner (valor)<small>Acima disso não é "barata".</small></div><input id="cfgMaxPl" type="number" step="1" value="12"></div>
+      <div class="cfg-row"><div class="lab">ROE mínimo (qualidade)<small>Aproximado: LPA ÷ VPA. Empresa precisa rentabilizar o patrimônio.</small></div><input id="cfgMinRoe" type="number" step="1" value="12"></div>
+      <div class="cfg-row"><div class="lab">Dív.Líq/EBITDA máxima (qualidade)<small>Aproximado via EV/EBITDA. Acima disso, endividamento pesa demais.</small></div><input id="cfgMaxDebt" type="number" step="0.5" value="3"></div>
+      <div class="cfg-row"><div class="lab">P/VP de referência p/ FIIs<small>Só um alerta visual na busca de FIIs — não filtra.</small></div><input id="cfgFiiMaxPvp" type="number" step="0.05" value="1.05"></div>
       <div class="cfg-row"><div class="lab">Negociação<small>Fracionário compra a partir de 1; lote arredonda p/ 100.</small></div><select id="cfgLot"><option value="1">Fracionário (1+)</option><option value="100">Lote padrão (100)</option></select></div>
       <div class="cfg-row"><div class="lab">Só comprar abaixo do alvo<small>Ignora ativos acima do preço justo/teto na ordem.</small></div><select id="cfgBelow"><option value="1">Sim</option><option value="0">Não, só ranqueia</option></select></div>
     </div>
@@ -328,7 +331,7 @@ const FREE=['PETR4','VALE3','MGLU3','ITUB4'];
 
 const seed={
   token:'',
-  cfg:{bazin:6,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',universe:60,sector:'',profit:1},
+  cfg:{bazin:6,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',universe:60,sector:'',profit:1,minRoe:12,maxDebt:3,fiiMaxPvp:1.05},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
     {tk:'PETR4',nm:'Petrobras',bkt:'rp',target:0,dpa:0},
@@ -389,7 +392,8 @@ async function fetchQuotes(tickers,withModules){
           pl:q.priceEarnings??null, eps:q.earningsPerShare??null,
           pvp:ks.priceToBook??null, bv:ks.bookValue??null,
           dy:dyo.dy, dpa:dyo.dpa,
-          low52:q.fiftyTwoWeekLow??null, high52:q.fiftyTwoWeekHigh??null
+          low52:q.fiftyTwoWeekLow??null, high52:q.fiftyTwoWeekHigh??null,
+          mktCap:ks.marketCap??null, ev:ks.enterpriseValue??null, evEbitda:ks.enterpriseToEbitda??null
         };
       });
     }catch(e){}
@@ -401,6 +405,14 @@ async function fetchQuotes(tickers,withModules){
 const qOf=tk=>S.quotes[tk.toUpperCase()]||{};
 const priceOf=tk=>qOf(tk).price??null;
 function graham(eps,bv){ return (eps>0&&bv>0)?Math.sqrt(22.5*eps*bv):null; }
+/* ROE aproximado: lucro/ação ÷ valor patrimonial/ação */
+function roeOf(eps,bv){ return (eps!=null&&bv>0)?(eps/bv*100):null; }
+/* Dívida líquida/EBITDA aproximada a partir de EV/EBITDA e EV = MktCap + Dív.Líq. */
+function debtToEbitda(ev,mktCap,evEbitda){
+  if(!(ev>0)||!(mktCap>0)||!(evEbitda>0)) return null;
+  const ebitda=ev/evEbitda; if(!(ebitda>0)) return null;
+  return (ev-mktCap)/ebitda;
+}
 
 /* alvo efetivo p/ um ativo da watchlist */
 function effTarget(a){
@@ -435,16 +447,13 @@ async function runScan(){
 
   const N=+S.cfg.universe;
   const sEnv=await getList('stock', Math.max(N,60));
-  const fEnv=await getList('fund', 50);
   if(sEnv&&sEnv.availableSectors){ S.scan.sectors=sEnv.availableSectors.slice().sort(); populateSectors(); }
 
   let stocks=(sEnv&&sEnv.stocks||[]).filter(x=>x.close>0&&x.volume>200000);
   if(S.cfg.sector) stocks=stocks.filter(x=>x.sector===S.cfg.sector);
-  let fiis=(fEnv&&fEnv.stocks||[]).filter(x=>x.subType==='fii'&&x.close>0&&x.volume>50000);
 
-  // pool a enriquecer (bounded)
-  const pool=[...stocks.slice(0,N).map(x=>({tk:x.stock,nm:x.name,sector:x.sector,kind:'stock'})),
-              ...fiis.slice(0,20).map(x=>({tk:x.stock,nm:x.name,sector:x.sector,kind:'fii'}))];
+  // pool a enriquecer (bounded) — só ações; FIIs têm busca dedicada na aba FIIs
+  const pool=stocks.slice(0,N).map(x=>({tk:x.stock,nm:x.name,sector:x.sector}));
   setBar(25);$('#scanStatus').textContent=`Enriquecendo ${pool.length} ativos…`;
 
   // enriquece em lotes; atualiza barra
@@ -455,16 +464,23 @@ async function runScan(){
   }
   setBar(95);$('#scanStatus').textContent='Ranqueando…';
 
-  // monta métricas
-  const metrics=pool.map(p=>{const q=qOf(p.tk);return {...p, price:q.price, pl:q.pl, pvp:q.pvp, eps:q.eps, bv:q.bv, dy:q.dy, dpa:q.dpa, low52:q.low52, high52:q.high52, graham:graham(q.eps,q.bv)};}).filter(m=>m.price>0);
+  // monta métricas e aplica o filtro de qualidade (ROE mínimo + dívida líq/EBITDA máxima)
+  const minRoe=+S.cfg.minRoe, maxDebt=+S.cfg.maxDebt;
+  const all=pool.map(p=>{
+    const q=qOf(p.tk);
+    const roe=roeOf(q.eps,q.bv), debtEbitda=debtToEbitda(q.ev,q.mktCap,q.evEbitda);
+    return {...p, price:q.price, pl:q.pl, pvp:q.pvp, eps:q.eps, bv:q.bv, dy:q.dy, dpa:q.dpa, low52:q.low52, high52:q.high52, graham:graham(q.eps,q.bv), roe, debtEbitda};
+  }).filter(m=>m.price>0);
+  // dado ausente não desqualifica (token livre não traz tudo) — só reprova quando o número existe e fura o critério
+  const metrics=all.filter(m=> (m.roe==null||m.roe>=minRoe) && (m.debtEbitda==null||m.debtEbitda<=maxDebt) );
 
-  // RENDA: DY >= minDy (ações + FIIs); ordena por DY, desempata P/VP menor
+  // RENDA: DY >= minDy; ordena por DY, desempata P/VP menor
   const minDy=+S.cfg.minDy;
   const renda=metrics.filter(m=>m.dy!=null&&m.dy>=minDy).sort((a,b)=> (b.dy-a.dy) || ((a.pvp||9)-(b.pvp||9)) ).slice(0,12);
 
-  // VALOR: ações com lucro, P/L<=maxPl; score = barato por P/L + P/VP + proximidade da mínima 52s + desconto Graham
+  // VALOR: lucro, P/L<=maxPl; score = barato por P/L + P/VP + proximidade da mínima 52s + desconto Graham
   const maxPl=+S.cfg.maxPl;
-  let val=metrics.filter(m=>m.kind==='stock');
+  let val=metrics;
   if(S.cfg.profit==1) val=val.filter(m=>m.pl!=null&&m.pl>0&&m.pl<=maxPl);
   val=val.map(m=>{
     let s=0,w=0;
@@ -479,7 +495,7 @@ async function runScan(){
   renderScan();
   setBar(100);setTimeout(()=>{$('#scanBarWrap').style.display='none';setBar(0);},500);
   btn.disabled=false;btn.innerHTML=o;
-  toast(`Scanner: ${renda.length} p/ renda, ${val.length} barganhas`);
+  toast(`Scanner: ${renda.length} p/ renda, ${val.length} barganhas (qualidade: ROE≥${minRoe}%, dív≤${maxDebt}x EBITDA)`);
 }
 function fmtAgo(ts){if(!ts)return'';const m=Math.round((Date.now()-ts)/60000);if(m<1)return'agora';if(m<60)return`há ${m} min`;const h=Math.round(m/60);return`há ${h}h`;}
 function populateSectors(){
@@ -492,26 +508,30 @@ function renderScan(){
   $('#scanStatus').textContent=`Atualizado ${fmtAgo(S.scan.at)}.`;
   $('#scanRendaCard').style.display='block';$('#scanValorCard').style.display='block';
   const grahamRef=m=>graham(m.eps,m.bv);
+  const roeTxt=m=>m.roe!=null?m.roe.toFixed(1)+'%':'—';
+  const debtTxt=m=>m.debtEbitda!=null?n2(m.debtEbitda)+'x':'—';
   $('#scanRendaBody').innerHTML=S.scan.renda.map((m,i)=>{
     const tgt=m.dpa>0?m.dpa/(S.cfg.bazin/100):null;const st=statusFrom(m.price,tgt);
     return `<tr>
-      <td class="tk"><span class="rank-n">${i+1}</span>${m.tk}<span class="nm">${m.kind==='fii'?'FII · ':''}${m.sector||''}</span></td>
+      <td class="tk"><span class="rank-n">${i+1}</span>${m.tk}<span class="nm">${m.sector||''}</span></td>
       <td>${brl(m.price)}</td><td class="up-pos">${m.dy!=null?m.dy.toFixed(1)+'%':'—'}</td>
       <td>${n2(m.pvp)}</td><td>${n2(m.pl)}</td>
+      <td>${roeTxt(m)}</td><td>${debtTxt(m)}</td>
       <td><span class="badge ${st.cls}">${st.txt}</span></td>
       <td style="text-align:right"><button class="icobtn" onclick="toRadar('${m.tk}','rp')" title="Adicionar à minha lista">＋</button></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--muted);font-family:Inter">Nada com DY acima do mínimo. Baixe o DY mínimo em Config.</td></tr>';
+  }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--muted);font-family:Inter">Nada com DY acima do mínimo (e dentro do filtro de qualidade). Ajuste DY mínimo, ROE mínimo ou dívida máxima em Config.</td></tr>';
   $('#scanValorBody').innerHTML=S.scan.valor.map((m,i)=>{
     const g=grahamRef(m);const st=statusFrom(m.price,g);
     return `<tr>
       <td class="tk"><span class="rank-n">${i+1}</span>${m.tk}<span class="nm">${m.sector||''}</span></td>
       <td>${brl(m.price)}</td><td>${n2(m.pl)}</td><td>${n2(m.pvp)}</td>
+      <td>${roeTxt(m)}</td><td>${debtTxt(m)}</td>
       <td>${g?brl(g):'—'}</td>
       <td><span class="badge ${st.cls}">${st.txt}</span></td>
       <td style="text-align:right"><button class="icobtn" onclick="toRadar('${m.tk}','vl')" title="Adicionar à minha lista">＋</button></td>
     </tr>`;
-  }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--muted);font-family:Inter">Nenhuma barata no filtro. Aumente o P/L máximo ou desligue "só com lucro".</td></tr>';
+  }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--muted);font-family:Inter">Nenhuma barata no filtro. Aumente o P/L máximo, desligue "só com lucro" ou afrouxe ROE/dívida em Config.</td></tr>';
 }
 window.toRadar=(tk,bkt)=>{
   if(S.watch.find(a=>a.tk===tk)){toast(tk+' já está na lista');return;}
@@ -557,11 +577,12 @@ async function renderFiis(){
   $('#fiiBody').innerHTML=merged.map(m=>{
     const tgt=m.dpa>0?m.dpa/(S.cfg.bazin/100):null;const st=statusFrom(m.price,tgt);
     const chTxt=m.change==null?'':`<span class="${m.change>=0?'up-pos':'up-neg'}" style="font-size:11px"> ${pct(m.change)}</span>`;
+    const pvpCls=m.pvp==null?'':(m.pvp<=S.cfg.fiiMaxPvp?'up-pos':'up-neg');
     return `<tr>
       <td class="tk">${m.tk}</td>
       <td>${brl(m.price)}${chTxt}</td>
       <td class="up-pos">${m.dy!=null?m.dy.toFixed(1)+'%':'—'}</td>
-      <td>${n2(m.pvp)}</td>
+      <td class="${pvpCls}" title="Referência: até ${n2(S.cfg.fiiMaxPvp)} — só um alerta visual, não filtra">${n2(m.pvp)}</td>
       <td><span class="badge ${st.cls}">${st.txt}</span></td>
       <td style="text-align:right"><button class="icobtn" onclick="toRadar('${m.tk}','rp')" title="Adicionar à minha lista">＋</button></td>
     </tr>`;
@@ -691,8 +712,11 @@ $('#savePos').onclick=async()=>{const tk=$('#pTicker').value.trim().toUpperCase(
 function syncTokenUI(){const on=!!S.token;$('#tokenDot').classList.toggle('on',on);$('#tokenLabel').textContent=on?'Conectado':'Sem token';}
 $('#cfgToken').value=S.token||'';
 $('#cfgBazin').value=S.cfg.bazin;$('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;$('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;
-function saveCfg(){S.cfg.bazin=parseFloat($('#cfgBazin').value)||6;S.cfg.minDy=parseFloat($('#cfgMinDy').value)||0;S.cfg.maxPl=parseFloat($('#cfgMaxPl').value)||12;S.cfg.lot=parseInt($('#cfgLot').value)||1;S.cfg.below=parseInt($('#cfgBelow').value);save();renderRadar();toast('Critérios atualizados');}
-['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
+$('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
+function saveCfg(){S.cfg.bazin=parseFloat($('#cfgBazin').value)||6;S.cfg.minDy=parseFloat($('#cfgMinDy').value)||0;S.cfg.maxPl=parseFloat($('#cfgMaxPl').value)||12;S.cfg.lot=parseInt($('#cfgLot').value)||1;S.cfg.below=parseInt($('#cfgBelow').value);
+  S.cfg.minRoe=parseFloat($('#cfgMinRoe').value)||0;S.cfg.maxDebt=parseFloat($('#cfgMaxDebt').value)||99;S.cfg.fiiMaxPvp=parseFloat($('#cfgFiiMaxPvp').value)||1.05;
+  save();renderRadar();if(S.fii.at)renderFiis();toast('Critérios atualizados');}
+['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow','cfgMinRoe','cfgMaxDebt','cfgFiiMaxPvp'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
 $('#saveToken').onclick=()=>{S.token=$('#cfgToken').value.trim();save();syncTokenUI();toast(S.token?'Token salvo':'Token removido');};
 $('#testToken').onclick=async()=>{const tk=$('#cfgToken').value.trim();const h=tk?{Authorization:'Bearer '+tk}:{};try{const r=await fetch(API+'ITUB4?range=1d&interval=1d',{headers:h});const d=await r.json();if(d.results&&d.results[0])toast('OK — ITUB4 '+brl(d.results[0].regularMarketPrice));else toast('Sem dados (verifique o token)');}catch(e){toast('Falha de conexão');}};
 function openModal(){$('#modalToken').value=S.token||'';$('#modalBg').classList.add('show');}
