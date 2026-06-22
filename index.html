@@ -36,7 +36,7 @@ h1,h2,h3,.disp{font-family:'Sora',sans-serif;letter-spacing:-.02em}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--clay)}.dot.on{background:var(--leaf)}
 .tabs{max-width:1080px;margin:0 auto;padding:0 18px;display:flex;gap:2px;overflow-x:auto}
 .tab{flex:0 0 auto;background:none;border:none;padding:15px 14px;font-family:'Sora';font-weight:600;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2.5px solid transparent;white-space:nowrap}
-.tab.active{color:var(--pine);border-color:var(--leaf)}
+.tab.active{color:#fff;border-color:var(--leaf)}
 .wrap{max-width:1080px;margin:0 auto;padding:22px 18px 80px}
 .view{display:none;animation:fade .25s ease}.view.active{display:block}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
@@ -155,6 +155,7 @@ tr:hover td{background:#FAFCFA}
   <nav class="tabs">
     <button class="tab active" data-tab="alocador">Alocador</button>
     <button class="tab" data-tab="scanner">Scanner B3</button>
+    <button class="tab" data-tab="fii">FIIs</button>
     <button class="tab" data-tab="radar">Minha lista</button>
     <button class="tab" data-tab="carteira">Carteira</button>
     <button class="tab" data-tab="config">Config</button>
@@ -218,6 +219,34 @@ tr:hover td{background:#FAFCFA}
       <div class="eyebrow">Top valor / baratas</div>
       <h3 style="margin:6px 0 10px;font-size:17px">Menor preço vs. fundamentos</h3>
       <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>P/L</th><th>P/VP</th><th>Graham</th><th>Status</th><th></th></tr></thead><tbody id="scanValorBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- FIIs -->
+  <section class="view" id="fii">
+    <div class="card">
+      <div class="h-row"><div><div class="eyebrow">Fundos imobiliários</div><h2>Buscar FIIs</h2></div></div>
+      <p class="sub">Busque por ticker entre os FIIs negociados na B3. Preço sai direto da lista da B3 (sem precisar de token); DY e P/VP completos pedem o token brapi em Config.</p>
+      <div class="filters">
+        <div style="grid-column:1/-1"><label>Buscar por ticker</label><input id="fiiSearch" placeholder="ex: MXRF11, HGLG11, KNRI11…" style="text-transform:uppercase"></div>
+        <div><label>Ordenar por</label><select id="fiiSort">
+          <option value="vol">Mais negociados</option>
+          <option value="dy">Maior DY%</option>
+          <option value="pvp">Menor P/VP</option>
+          <option value="price">Maior preço</option>
+        </select></div>
+      </div>
+      <div class="scan-head">
+        <button class="btn" id="fiiLoadBtn">⌕ Carregar FIIs</button>
+        <span class="scan-status" id="fiiStatus">Ainda não carregado.</span>
+      </div>
+      <div class="bar" id="fiiBarWrap" style="display:none"><i id="fiiBar"></i></div>
+    </div>
+
+    <div class="card" id="fiiResultsCard" style="display:none">
+      <div class="eyebrow">Resultado</div>
+      <h3 style="margin:6px 0 10px;font-size:17px" id="fiiResultsTitle">FIIs</h3>
+      <div class="tbl-scroll"><table><thead><tr><th>Ativo</th><th>Preço</th><th>DY%</th><th>P/VP</th><th>Status</th><th></th></tr></thead><tbody id="fiiBody"></tbody></table></div>
     </div>
   </section>
 
@@ -308,11 +337,12 @@ const seed={
   ],
   portfolio:[],
   quotes:{},     // tk -> {price,change,name,pl,pvp,eps,bv,dy,dpa,low52,high52}
-  scan:{at:0, renda:[], valor:[], sectors:[]}
+  scan:{at:0, renda:[], valor:[], sectors:[]},
+  fii:{at:0, list:[]}   // universo de FIIs (ticker/preço/volume), para a busca dedicada
 };
 
 let S=load();
-function load(){try{const r=JSON.parse(localStorage.getItem(LS));if(!r)return clone(seed);return {...clone(seed),...r,cfg:{...seed.cfg,...(r.cfg||{})},scan:{...seed.scan,...(r.scan||{})}};}catch(e){return clone(seed);}}
+function load(){try{const r=JSON.parse(localStorage.getItem(LS));if(!r)return clone(seed);return {...clone(seed),...r,cfg:{...seed.cfg,...(r.cfg||{})},scan:{...seed.scan,...(r.scan||{})},fii:{...seed.fii,...(r.fii||{})}};}catch(e){return clone(seed);}}
 function clone(o){return JSON.parse(JSON.stringify(o));}
 function save(){localStorage.setItem(LS,JSON.stringify(S));}
 const $=s=>document.querySelector(s);const $$=s=>document.querySelectorAll(s);
@@ -489,6 +519,59 @@ window.toRadar=(tk,bkt)=>{
 };
 
 /* ============================================================
+   BUSCA DE FIIs
+   ============================================================ */
+async function loadFiis(){
+  const btn=$('#fiiLoadBtn');btn.disabled=true;const o=btn.innerHTML;btn.innerHTML='<span class="spin"></span> Carregando…';
+  $('#fiiBarWrap').style.display='block';const setBar=p=>{$('#fiiBar').style.width=p+'%';};
+  $('#fiiStatus').textContent='Buscando lista de FIIs…';setBar(20);
+  const fEnv=await getList('fund',400);
+  setBar(70);
+  const list=(fEnv&&fEnv.stocks||[]).filter(x=>x.subType==='fii').map(x=>({tk:x.stock,close:x.close,change:x.change,volume:x.volume}));
+  S.fii={at:Date.now(),list};save();
+  setBar(100);
+  $('#fiiStatus').textContent=`${list.length} FIIs carregados · ${fmtAgo(S.fii.at)}.`;
+  setTimeout(()=>{$('#fiiBarWrap').style.display='none';setBar(0);},400);
+  btn.disabled=false;btn.innerHTML=o;
+  $('#fiiResultsCard').style.display='block';
+  await renderFiis();
+  toast(`${list.length} FIIs carregados`);
+}
+async function renderFiis(){
+  if(!S.fii.at){$('#fiiResultsCard').style.display='none';return;}
+  $('#fiiStatus').textContent=`${S.fii.list.length} FIIs carregados · ${fmtAgo(S.fii.at)}.`;
+  const q=$('#fiiSearch').value.trim().toUpperCase();
+  const matches=S.fii.list.filter(x=>!q||x.tk.includes(q));
+  const shown=matches.slice().sort((a,b)=>b.volume-a.volume).slice(0,40);
+  const need=shown.map(x=>x.tk).filter(tk=>!S.quotes[tk]);
+  if(need.length) await fetchQuotes(need,true);
+  let merged=shown.map(x=>{const qq=qOf(x.tk);return {tk:x.tk,price:qq.price??x.close,change:qq.change??x.change,dy:qq.dy,pvp:qq.pvp,dpa:qq.dpa};});
+  const sortBy=$('#fiiSort').value;
+  merged.sort((a,b)=>{
+    if(sortBy==='dy')return (b.dy??-1)-(a.dy??-1);
+    if(sortBy==='pvp')return (a.pvp??99)-(b.pvp??99);
+    if(sortBy==='price')return (b.price||0)-(a.price||0);
+    return 0;
+  });
+  $('#fiiResultsTitle').textContent=q?`Resultado para "${q}" (${merged.length})`:`Mais negociados (${merged.length} de ${matches.length})`;
+  $('#fiiBody').innerHTML=merged.map(m=>{
+    const tgt=m.dpa>0?m.dpa/(S.cfg.bazin/100):null;const st=statusFrom(m.price,tgt);
+    const chTxt=m.change==null?'':`<span class="${m.change>=0?'up-pos':'up-neg'}" style="font-size:11px"> ${pct(m.change)}</span>`;
+    return `<tr>
+      <td class="tk">${m.tk}</td>
+      <td>${brl(m.price)}${chTxt}</td>
+      <td class="up-pos">${m.dy!=null?m.dy.toFixed(1)+'%':'—'}</td>
+      <td>${n2(m.pvp)}</td>
+      <td><span class="badge ${st.cls}">${st.txt}</span></td>
+      <td style="text-align:right"><button class="icobtn" onclick="toRadar('${m.tk}','rp')" title="Adicionar à minha lista">＋</button></td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--muted);font-family:Inter">Nenhum FII encontrado para essa busca.</td></tr>';
+}
+$('#fiiLoadBtn').onclick=loadFiis;
+$('#fiiSearch').addEventListener('input',()=>renderFiis());
+$('#fiiSort').addEventListener('change',()=>renderFiis());
+
+/* ============================================================
    MOTOR DE ALOCAÇÃO (usa scanner + manual)
    ============================================================ */
 function candidates(bkt){
@@ -651,6 +734,7 @@ if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.s
   $('#fUniverse').value=S.cfg.universe;$('#fProfit').value=S.cfg.profit;
   if(S.scan.sectors&&S.scan.sectors.length)populateSectors();
   renderRadar();renderPortfolio();renderScan();
+  if(S.fii.at){$('#fiiResultsCard').style.display='block';renderFiis();}
   refreshAll();
 })();
 </script>
