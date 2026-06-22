@@ -129,6 +129,14 @@ tr:hover td{background:#FAFCFA}
 .cfg-row input{max-width:120px;text-align:right}.cfg-row select{max-width:170px}
 .legal{margin-top:18px;font-size:11.5px;color:var(--muted);line-height:1.5;background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 15px}
 .legal strong{color:var(--clay)}
+.fut-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:6px}
+.fut-box{border:1px solid var(--line);border-radius:11px;padding:13px}
+.fut-box .fut-tk{font-family:'Sora';font-weight:700;font-size:15px}
+.fut-box .fut-tk .nm{display:block;font-family:'Inter';font-weight:400;font-size:11px;color:var(--muted);margin-top:2px}
+.fut-price{font-family:var(--mono);font-size:19px;font-weight:600;margin-top:8px}
+.fut-contracts{font-size:13px;margin-top:8px}
+.fut-contracts small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.fut-empty{color:var(--muted);font-size:12.5px;margin-top:8px}
 .modal-bg{position:fixed;inset:0;background:rgba(15,33,27,.42);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:50;padding:18px}
 .modal-bg.show{display:flex}
 .modal{background:#fff;border-radius:16px;max-width:440px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
@@ -189,7 +197,15 @@ tr:hover td{background:#FAFCFA}
       <button class="btn full" id="genBtn" style="margin-top:18px">Gerar ordem de compra</button>
       <div id="ticketArea"><div class="empty"><div class="ico">📋</div>Informe o valor e gere sua ordem.<br><span style="font-size:12px">Rode o <b>Scanner B3</b> uma vez para ter candidatos ranqueados.</span></div></div>
     </div>
-    <div class="legal"><strong>Aviso:</strong> ferramenta pessoal de organização e estudo. Não sou consultor nem assessor de investimentos (CVM) e isto não é recomendação de compra/venda. Projeções são estimativas simples baseadas em histórico e indicadores — desempenho passado não garante futuro. Cotações e indicadores podem ter atraso ou erro. Decisões e riscos são seus.</div>
+
+    <div class="card" id="futCard">
+      <div class="h-row"><div><div class="eyebrow">Derivativos</div><h2 style="font-size:18px;margin:6px 0 2px">Minicontratos futuros (B3)</h2></div><button class="btn ghost sm" id="futRefresh">↻ Atualizar</button></div>
+      <p class="sub">WIN (mini Ibovespa) e WDO (mini dólar) — os únicos disponíveis sem plano pago na fonte de dados. Preço é o ajuste/fechamento do contrato vigente (não intradiário). O painel só calcula quantos contratos a <b>margem que você informar</b> cobre no valor disponível acima — não aponta direção de compra/venda.</p>
+      <div class="fut-grid" id="futGrid"><div class="fut-empty">Toque em "Atualizar" para buscar o contrato vigente.</div></div>
+      <p class="hint" id="futStatus">Ainda não atualizado.</p>
+    </div>
+
+    <div class="legal"><strong>Aviso:</strong> ferramenta pessoal de organização e estudo. Não sou consultor nem assessor de investimentos (CVM) e isto não é recomendação de compra/venda. Projeções são estimativas simples baseadas em histórico e indicadores — desempenho passado não garante futuro. Cotações e indicadores podem ter atraso ou erro. Futuros são instrumentos com alavancagem e risco de perda além do capital investido; margem de garantia varia por corretora e não é fornecida pela fonte de dados — confirme sempre na sua corretora. Decisões e riscos são seus.</div>
   </section>
 
   <!-- SCANNER -->
@@ -305,6 +321,12 @@ tr:hover td{background:#FAFCFA}
       <div class="cfg-row"><div class="lab">Só comprar abaixo do alvo<small>Ignora ativos acima do preço justo/teto na ordem.</small></div><select id="cfgBelow"><option value="1">Sim</option><option value="0">Não, só ranqueia</option></select></div>
     </div>
     <div class="card">
+      <div class="eyebrow">Derivativos</div><h3 style="margin:6px 0 14px;font-size:16px">Margem de garantia (futuros)</h3>
+      <p class="sub" style="margin-bottom:10px">A brapi.dev não informa margem — confira na sua corretora e atualize aqui de vez em quando. Usada só para calcular quantos minicontratos cabem no valor disponível no Alocador.</p>
+      <div class="cfg-row"><div class="lab">Margem por contrato — WIN<small>Mini Ibovespa.</small></div><input id="cfgWinMargin" type="number" step="10" placeholder="ex: 600"></div>
+      <div class="cfg-row"><div class="lab">Margem por contrato — WDO<small>Mini dólar.</small></div><input id="cfgWdoMargin" type="number" step="10" placeholder="ex: 1500"></div>
+    </div>
+    <div class="card">
       <div class="eyebrow">Dados</div><h3 style="margin:6px 0 14px;font-size:16px">Backup e reset</h3>
       <div class="row-end"><button class="btn ghost sm" id="exportBtn">Exportar JSON</button><button class="btn ghost sm" id="importBtn">Importar JSON</button><button class="btn ghost sm" id="resetBtn" style="color:var(--rust)">Restaurar exemplo</button></div>
       <input type="file" id="fileIn" accept="application/json" style="display:none">
@@ -331,7 +353,7 @@ const FREE=['PETR4','VALE3','MGLU3','ITUB4'];
 
 const seed={
   token:'',
-  cfg:{bazin:6,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',universe:60,sector:'',profit:1,minRoe:12,maxDebt:3,fiiMaxPvp:1.05},
+  cfg:{bazin:6,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',universe:60,sector:'',profit:1,minRoe:12,maxDebt:3,fiiMaxPvp:1.05,winMargin:0,wdoMargin:0},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
     {tk:'PETR4',nm:'Petrobras',bkt:'rp',target:0,dpa:0},
@@ -341,11 +363,12 @@ const seed={
   portfolio:[],
   quotes:{},     // tk -> {price,change,name,pl,pvp,eps,bv,dy,dpa,low52,high52}
   scan:{at:0, renda:[], valor:[], sectors:[]},
-  fii:{at:0, list:[]}   // universo de FIIs (ticker/preço/volume), para a busca dedicada
+  fii:{at:0, list:[]},   // universo de FIIs (ticker/preço/volume), para a busca dedicada
+  futures:{at:0, win:null, wdo:null}   // contrato vigente WIN/WDO (sandbox brapi, sem token)
 };
 
 let S=load();
-function load(){try{const r=JSON.parse(localStorage.getItem(LS));if(!r)return clone(seed);return {...clone(seed),...r,cfg:{...seed.cfg,...(r.cfg||{})},scan:{...seed.scan,...(r.scan||{})},fii:{...seed.fii,...(r.fii||{})}};}catch(e){return clone(seed);}}
+function load(){try{const r=JSON.parse(localStorage.getItem(LS));if(!r)return clone(seed);return {...clone(seed),...r,cfg:{...seed.cfg,...(r.cfg||{})},scan:{...seed.scan,...(r.scan||{})},fii:{...seed.fii,...(r.fii||{})},futures:{...seed.futures,...(r.futures||{})}};}catch(e){return clone(seed);}}
 function clone(o){return JSON.parse(JSON.stringify(o));}
 function save(){localStorage.setItem(LS,JSON.stringify(S));}
 const $=s=>document.querySelector(s);const $$=s=>document.querySelectorAll(s);
@@ -593,6 +616,60 @@ $('#fiiSearch').addEventListener('input',()=>renderFiis());
 $('#fiiSort').addEventListener('change',()=>renderFiis());
 
 /* ============================================================
+   FUTUROS (WIN/WDO) — só dimensiona contratos via margem manual,
+   não aponta direção de compra/venda
+   ============================================================ */
+const FUT_MONTH_CODE=['F','G','H','J','K','M','N','Q','U','V','X','Z'];
+function futCandidates(){
+  const out=[];const now=new Date();
+  for(let i=0;i<7;i++){
+    const dt=new Date(now.getFullYear(),now.getMonth()+i,1);
+    const code=FUT_MONTH_CODE[dt.getMonth()]+String(dt.getFullYear()).slice(-2);
+    out.push('WIN'+code,'WDO'+code);
+  }
+  return out;
+}
+async function fetchFutures(){
+  const btn=$('#futRefresh');if(btn){btn.disabled=true;btn.innerHTML='<span class="spin"></span>';}
+  try{
+    const r=await fetch(`https://brapi.dev/api/v2/futures/quote?symbols=${futCandidates().join(',')}`);
+    const d=await r.json();
+    const cutoff=Date.now()-2*864e5;
+    const pick=under=>{
+      const list=(d.quotes||[]).filter(q=>q.underlyingAsset===under && new Date(q.expirationDate).getTime()>=cutoff && (q.close!=null||q.average!=null||q.settlement!=null));
+      list.sort((a,b)=>new Date(a.expirationDate)-new Date(b.expirationDate));
+      const q=list[0];if(!q)return null;
+      return {symbol:q.symbol, price:q.close??q.average??q.settlement, change:q.oscillationPct??null, expiration:q.expirationDate};
+    };
+    S.futures={at:Date.now(), win:pick('WIN'), wdo:pick('WDO')};save();
+    toast('Futuros atualizados');
+  }catch(e){toast('Falha ao buscar futuros');}
+  if(btn){btn.disabled=false;btn.innerHTML='↻ Atualizar';}
+  renderFutures();
+}
+function renderFutures(){
+  const grid=$('#futGrid');if(!grid)return;
+  if(!S.futures.at){grid.innerHTML='<div class="fut-empty">Toque em "Atualizar" para buscar o contrato vigente.</div>';$('#futStatus').textContent='Ainda não atualizado.';return;}
+  const budget=parseFloat($('#budget').value)||0;
+  const boxes=[['WIN','win',+S.cfg.winMargin],['WDO','wdo',+S.cfg.wdoMargin]].map(([label,key,margin])=>{
+    const f=S.futures[key];
+    if(!f) return `<div class="fut-box"><div class="fut-tk">${label}</div><div class="fut-empty">Sem contrato vigente encontrado.</div></div>`;
+    const chTxt=f.change==null?'':`<span class="${f.change>=0?'up-pos':'up-neg'}" style="font-size:11px"> ${pct(f.change)}</span>`;
+    const venc=f.expiration?new Date(f.expiration).toLocaleDateString('pt-BR'):'—';
+    const n=margin>0?Math.floor(budget/margin):null;
+    return `<div class="fut-box">
+      <div class="fut-tk">${label}<span class="nm">${f.symbol} · venc. ${venc}</span></div>
+      <div class="fut-price">${f.price!=null?f.price.toLocaleString('pt-BR',{maximumFractionDigits:1}):'—'} pts${chTxt}</div>
+      <div class="fut-contracts">${margin>0?`${n} contrato${n===1?'':'s'} com a margem informada<small>${brl(margin)} de margem / contrato</small>`:'<small>Informe a margem por contrato em Config</small>'}</div>
+    </div>`;
+  });
+  grid.innerHTML=boxes.join('');
+  $('#futStatus').textContent=`Ajuste de ${fmtAgo(S.futures.at)}.`;
+}
+$('#futRefresh').onclick=fetchFutures;
+$('#budget').addEventListener('input',()=>renderFutures());
+
+/* ============================================================
    MOTOR DE ALOCAÇÃO (usa scanner + manual)
    ============================================================ */
 function candidates(bkt){
@@ -713,10 +790,12 @@ function syncTokenUI(){const on=!!S.token;$('#tokenDot').classList.toggle('on',o
 $('#cfgToken').value=S.token||'';
 $('#cfgBazin').value=S.cfg.bazin;$('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;$('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;
 $('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
+$('#cfgWinMargin').value=S.cfg.winMargin||'';$('#cfgWdoMargin').value=S.cfg.wdoMargin||'';
 function saveCfg(){S.cfg.bazin=parseFloat($('#cfgBazin').value)||6;S.cfg.minDy=parseFloat($('#cfgMinDy').value)||0;S.cfg.maxPl=parseFloat($('#cfgMaxPl').value)||12;S.cfg.lot=parseInt($('#cfgLot').value)||1;S.cfg.below=parseInt($('#cfgBelow').value);
   S.cfg.minRoe=parseFloat($('#cfgMinRoe').value)||0;S.cfg.maxDebt=parseFloat($('#cfgMaxDebt').value)||99;S.cfg.fiiMaxPvp=parseFloat($('#cfgFiiMaxPvp').value)||1.05;
-  save();renderRadar();if(S.fii.at)renderFiis();toast('Critérios atualizados');}
-['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow','cfgMinRoe','cfgMaxDebt','cfgFiiMaxPvp'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
+  S.cfg.winMargin=parseFloat($('#cfgWinMargin').value)||0;S.cfg.wdoMargin=parseFloat($('#cfgWdoMargin').value)||0;
+  save();renderRadar();if(S.fii.at)renderFiis();renderFutures();toast('Critérios atualizados');}
+['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow','cfgMinRoe','cfgMaxDebt','cfgFiiMaxPvp','cfgWinMargin','cfgWdoMargin'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
 $('#saveToken').onclick=()=>{S.token=$('#cfgToken').value.trim();save();syncTokenUI();toast(S.token?'Token salvo':'Token removido');};
 $('#testToken').onclick=async()=>{const tk=$('#cfgToken').value.trim();const h=tk?{Authorization:'Bearer '+tk}:{};try{const r=await fetch(API+'ITUB4?range=1d&interval=1d',{headers:h});const d=await r.json();if(d.results&&d.results[0])toast('OK — ITUB4 '+brl(d.results[0].regularMarketPrice));else toast('Sem dados (verifique o token)');}catch(e){toast('Falha de conexão');}};
 function openModal(){$('#modalToken').value=S.token||'';$('#modalBg').classList.add('show');}
@@ -759,6 +838,7 @@ if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.s
   if(S.scan.sectors&&S.scan.sectors.length)populateSectors();
   renderRadar();renderPortfolio();renderScan();
   if(S.fii.at){$('#fiiResultsCard').style.display='block';renderFiis();}
+  renderFutures();
   refreshAll();
 })();
 </script>
