@@ -242,7 +242,7 @@ tr:hover td{background:#FAFCFA}
   <section class="view" id="fii">
     <div class="card">
       <div class="h-row"><div><div class="eyebrow">Fundos imobiliários</div><h2>Buscar FIIs</h2></div></div>
-      <p class="sub">Busque por ticker entre os FIIs negociados na B3. Preço sai direto da lista da B3 (sem precisar de token); DY e P/VP completos pedem o token brapi em Config.</p>
+      <p class="sub">Busque por ticker entre os FIIs negociados na B3. Preço sai direto da lista da B3 (sem precisar de token); DY e P/VP completos pedem o token brapi ou a chave HG Brasil em Config.</p>
       <div class="filters">
         <div style="grid-column:1/-1"><label>Buscar por ticker</label><input id="fiiSearch" placeholder="ex: MXRF11, HGLG11, KNRI11…" style="text-transform:uppercase"></div>
         <div><label>Ordenar por</label><select id="fiiSort">
@@ -310,6 +310,12 @@ tr:hover td{background:#FAFCFA}
       <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="testToken">Testar</button><button class="btn sm" id="saveToken">Salvar token</button></div>
     </div>
     <div class="card">
+      <div class="eyebrow">Fonte alternativa</div><h3 style="margin:6px 0 14px;font-size:16px">DY / P-VP via HG Brasil</h3>
+      <p class="sub" style="margin-bottom:10px">Sem o módulo pago da brapi, DY e P/VP de tickers fora dos 4 grátis ficam vazios. A HG Brasil tem plano grátis (400 consultas/dia, dado com delay de até 1h) que cobre isso — crie sua chave em <b>console.hgbrasil.com</b> e cole aqui. Usada em Minha Lista e na Busca de FIIs (não no Scanner, que consultaria dezenas de tickers de uma vez e esgotaria a cota rápido).</p>
+      <label>Chave HG Brasil</label><input id="cfgHgKey" placeholder="cole aqui sua chave" autocomplete="off">
+      <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="testHgKey">Testar</button><button class="btn sm" id="saveHgKey">Salvar chave</button></div>
+    </div>
+    <div class="card">
       <div class="eyebrow">Critérios</div><h3 style="margin:6px 0 14px;font-size:16px">Parâmetros de decisão</h3>
       <div class="cfg-row"><div class="lab">Meta de yield (Bazin)<small>Preço-teto = DPA ÷ meta. Padrão 6%.</small></div><input id="cfgBazin" type="number" step="0.5" value="6"></div>
       <div class="cfg-row"><div class="lab">DY mínimo no scanner (renda)<small>Ignora dividendos abaixo disso.</small></div><input id="cfgMinDy" type="number" step="0.5" value="5"></div>
@@ -349,10 +355,12 @@ tr:hover td{background:#FAFCFA}
 const LS='jmg_invest_v2';
 const API='https://brapi.dev/api/quote/';
 const LIST='https://brapi.dev/api/quote/list';
+const HG_API='https://api.hgbrasil.com/finance/stock_price';
 const FREE=['PETR4','VALE3','MGLU3','ITUB4'];
 
 const seed={
   token:'',
+  hgKey:'',
   cfg:{bazin:6,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',universe:60,sector:'',profit:1,minRoe:12,maxDebt:3,fiiMaxPvp:1.05,winMargin:0,wdoMargin:0},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
@@ -427,6 +435,36 @@ async function fetchQuotes(tickers,withModules){
 }
 const qOf=tk=>S.quotes[tk.toUpperCase()]||{};
 const priceOf=tk=>qOf(tk).price??null;
+
+/* ---------- HG Brasil: fallback de DY/P-VP p/ tickers fora dos 4 grátis (sem módulo brapi) ---------- */
+const hgInFlight=new Set();
+async function fetchHg(tk){
+  try{
+    const r=await fetch(`${HG_API}?key=${encodeURIComponent(S.hgKey)}&symbol=${tk.toLowerCase()}`);
+    const d=await r.json();
+    const res=d.results&&d.results[tk.toUpperCase()];
+    if(!res) return null;
+    const f=res.financials||{};
+    const dy=f.dividends&&f.dividends.yield_12m!=null?f.dividends.yield_12m:null;
+    const dpa=f.dividends&&f.dividends.yield_12m_sum!=null?f.dividends.yield_12m_sum:null;
+    const pvp=f.price_to_book_ratio??null;
+    return {dy,dpa,pvp};
+  }catch(e){return null;}
+}
+async function enrichWithHg(tickers){
+  if(!S.hgKey) return;
+  for(const tk of [...new Set(tickers.map(t=>t.toUpperCase()))]){
+    const q=S.quotes[tk]||{};
+    if(q.hgTried||q.dy!=null||hgInFlight.has(tk)) continue;
+    hgInFlight.add(tk);
+    const hg=await fetchHg(tk);
+    const cur=S.quotes[tk]||q;
+    S.quotes[tk]={...cur, hgTried:true, dy:cur.dy??hg?.dy??null, dpa:(cur.dpa>0?cur.dpa:hg?.dpa)||0, pvp:cur.pvp??hg?.pvp??null};
+    hgInFlight.delete(tk);
+    await sleep(120);
+  }
+  save();
+}
 function graham(eps,bv){ return (eps>0&&bv>0)?Math.sqrt(22.5*eps*bv):null; }
 /* ROE aproximado: lucro/ação ÷ valor patrimonial/ação */
 function roeOf(eps,bv){ return (eps!=null&&bv>0)?(eps/bv*100):null; }
@@ -588,6 +626,7 @@ async function renderFiis(){
   const shown=matches.slice().sort((a,b)=>b.volume-a.volume).slice(0,40);
   const need=shown.map(x=>x.tk).filter(tk=>!S.quotes[tk]);
   if(need.length) await fetchQuotes(need,true);
+  if(S.hgKey){await enrichWithHg(shown.map(x=>x.tk));}
   let merged=shown.map(x=>{const qq=qOf(x.tk);return {tk:x.tk,price:qq.price??x.close,change:qq.change??x.change,dy:qq.dy,pvp:qq.pvp,dpa:qq.dpa};});
   const sortBy=$('#fiiSort').value;
   merged.sort((a,b)=>{
@@ -760,7 +799,7 @@ function renderRadar(){
 window.editAsset=i=>{editIdx=i;const a=S.watch[i];$('#aTicker').value=a.tk;$('#aName').value=a.nm||'';$('#aBucket').value=a.bkt;$('#aTarget').value=a.target||'';$('#aDpa').value=a.dpa||'';$('#formTitle').textContent='Editar '+a.tk;$('#cancelEdit').style.display='inline-flex';$('#aTicker').scrollIntoView({behavior:'smooth',block:'center'});};
 window.delAsset=i=>{if(confirm('Remover '+S.watch[i].tk+'?')){S.watch.splice(i,1);save();renderRadar();toast('Removido');}};
 function resetForm(){editIdx=-1;['aTicker','aName','aTarget','aDpa'].forEach(id=>$('#'+id).value='');$('#aBucket').value='rp';$('#formTitle').textContent='Adicionar ativo';$('#cancelEdit').style.display='none';}
-$('#saveAsset').onclick=async()=>{const tk=$('#aTicker').value.trim().toUpperCase();if(!tk){toast('Informe o ticker');return;}const obj={tk,nm:$('#aName').value.trim(),bkt:$('#aBucket').value,target:parseFloat($('#aTarget').value)||0,dpa:parseFloat($('#aDpa').value)||0};if(editIdx>=0)S.watch[editIdx]=obj;else{if(S.watch.find(x=>x.tk===tk)){toast('Ticker já existe');return;}S.watch.push(obj);}save();resetForm();await fetchQuotes([tk],true);renderRadar();toast('Salvo');};
+$('#saveAsset').onclick=async()=>{const tk=$('#aTicker').value.trim().toUpperCase();if(!tk){toast('Informe o ticker');return;}const obj={tk,nm:$('#aName').value.trim(),bkt:$('#aBucket').value,target:parseFloat($('#aTarget').value)||0,dpa:parseFloat($('#aDpa').value)||0};if(editIdx>=0)S.watch[editIdx]=obj;else{if(S.watch.find(x=>x.tk===tk)){toast('Ticker já existe');return;}S.watch.push(obj);}save();resetForm();await fetchQuotes([tk],true);await enrichWithHg([tk]);renderRadar();toast('Salvo');};
 $('#cancelEdit').onclick=resetForm;
 
 /* ============================================================
@@ -781,13 +820,14 @@ function renderPortfolio(){
   el.innerHTML=`<div class="pf-top"><div class="donut-wrap"><svg width="128" height="128" viewBox="0 0 128 128">${arcs}<text x="64" y="60" text-anchor="middle" font-family="Sora" font-weight="700" font-size="13" fill="#15211B">${brl(totNow||totCost).replace('R$','').trim()}</text><text x="64" y="76" text-anchor="middle" font-family="Inter" font-size="9" fill="#5C6B62">posição</text></svg></div><div class="legend">${legend||'<span class="hint">Sem cotações ainda</span>'}</div></div><div class="pf-stats"><div class="stat"><div class="k">Custo total</div><div class="v">${brl(totCost)}</div></div><div class="stat"><div class="k">Valor atual</div><div class="v">${brl(totNow)}</div></div><div class="stat"><div class="k">Resultado</div><div class="v ${pnl>=0?'up-pos':'up-neg'}">${brl(pnl)} <span style="font-size:13px">(${pct(pnlPct)})</span></div></div><div class="stat"><div class="k">Dividendos/ano estim.</div><div class="v up-pos">${brl(totDiv)}</div></div></div><div class="tbl-scroll" style="margin-top:16px"><table><thead><tr><th>Ativo</th><th>Qtd</th><th>P.médio</th><th>Atual</th><th>Posição</th><th>Result.</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 window.delPos=i=>{if(confirm('Remover posição '+S.portfolio[i].tk+'?')){S.portfolio.splice(i,1);save();renderPortfolio();}};
-$('#savePos').onclick=async()=>{const tk=$('#pTicker').value.trim().toUpperCase(),qty=parseInt($('#pQty').value)||0,avg=parseFloat($('#pAvg').value)||0;if(!tk||qty<=0){toast('Ticker e quantidade obrigatórios');return;}S.portfolio.push({tk,qty,avg});save();['pTicker','pQty','pAvg'].forEach(id=>$('#'+id).value='');await fetchQuotes([tk],true);renderPortfolio();toast('Posição adicionada');};
+$('#savePos').onclick=async()=>{const tk=$('#pTicker').value.trim().toUpperCase(),qty=parseInt($('#pQty').value)||0,avg=parseFloat($('#pAvg').value)||0;if(!tk||qty<=0){toast('Ticker e quantidade obrigatórios');return;}S.portfolio.push({tk,qty,avg});save();['pTicker','pQty','pAvg'].forEach(id=>$('#'+id).value='');await fetchQuotes([tk],true);await enrichWithHg([tk]);renderPortfolio();toast('Posição adicionada');};
 
 /* ============================================================
    CONFIG / TOKEN / BACKUP
    ============================================================ */
 function syncTokenUI(){const on=!!S.token;$('#tokenDot').classList.toggle('on',on);$('#tokenLabel').textContent=on?'Conectado':'Sem token';}
 $('#cfgToken').value=S.token||'';
+$('#cfgHgKey').value=S.hgKey||'';
 $('#cfgBazin').value=S.cfg.bazin;$('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;$('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;
 $('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
 $('#cfgWinMargin').value=S.cfg.winMargin||'';$('#cfgWdoMargin').value=S.cfg.wdoMargin||'';
@@ -798,6 +838,8 @@ function saveCfg(){S.cfg.bazin=parseFloat($('#cfgBazin').value)||6;S.cfg.minDy=p
 ['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow','cfgMinRoe','cfgMaxDebt','cfgFiiMaxPvp','cfgWinMargin','cfgWdoMargin'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
 $('#saveToken').onclick=()=>{S.token=$('#cfgToken').value.trim();save();syncTokenUI();toast(S.token?'Token salvo':'Token removido');};
 $('#testToken').onclick=async()=>{const tk=$('#cfgToken').value.trim();const h=tk?{Authorization:'Bearer '+tk}:{};try{const r=await fetch(API+'BBAS3?range=1d&interval=1d',{headers:h});const d=await r.json();if(d.results&&d.results[0])toast('Token OK — BBAS3 '+brl(d.results[0].regularMarketPrice));else toast('Token não liberou BBAS3: '+(d.message||d.code||'sem dados'));}catch(e){toast('Falha de conexão');}};
+$('#saveHgKey').onclick=()=>{S.hgKey=$('#cfgHgKey').value.trim();Object.values(S.quotes).forEach(q=>{delete q.hgTried;});save();toast(S.hgKey?'Chave HG Brasil salva':'Chave removida');};
+$('#testHgKey').onclick=async()=>{const k=$('#cfgHgKey').value.trim();if(!k){toast('Cole a chave antes de testar');return;}try{const r=await fetch(`${HG_API}?key=${encodeURIComponent(k)}&symbol=mxrf11`);const d=await r.json();const res=d.results&&d.results.MXRF11;const dy=res&&res.financials&&res.financials.dividends&&res.financials.dividends.yield_12m;if(dy!=null)toast('Chave OK — MXRF11 DY '+dy.toFixed(2)+'%');else toast('Chave não liberou MXRF11: '+(d.results&&d.results.error_message||d.message||'sem dados'));}catch(e){toast('Falha de conexão');}};
 function openModal(){$('#modalToken').value=S.token||'';$('#modalBg').classList.add('show');}
 $('#tokenPill').onclick=openModal;$('#modalX').onclick=()=>$('#modalBg').classList.remove('show');
 $('#modalBg').onclick=e=>{if(e.target===$('#modalBg'))$('#modalBg').classList.remove('show');};
@@ -821,7 +863,7 @@ $('#scanBtn').onclick=runScan;
 $('#fSector').addEventListener('change',e=>{S.cfg.sector=e.target.value;save();});
 $('#fUniverse').addEventListener('change',e=>{S.cfg.universe=+e.target.value;save();});
 $('#fProfit').addEventListener('change',e=>{S.cfg.profit=+e.target.value;save();});
-async function refreshAll(){const tks=[...new Set([...S.watch.map(a=>a.tk),...S.portfolio.map(p=>p.tk)])];await fetchQuotes(tks,true);renderRadar();renderPortfolio();}
+async function refreshAll(){const tks=[...new Set([...S.watch.map(a=>a.tk),...S.portfolio.map(p=>p.tk)])];await fetchQuotes(tks,true);await enrichWithHg(tks);renderRadar();renderPortfolio();}
 async function btnRefresh(btn){const o=btn.innerHTML;btn.innerHTML='<span class="spin"></span>';await refreshAll();btn.innerHTML=o;toast('Cotações atualizadas');}
 $('#refreshRadar').onclick=e=>btnRefresh(e.currentTarget);
 $('#refreshPf').onclick=e=>btnRefresh(e.currentTarget);
