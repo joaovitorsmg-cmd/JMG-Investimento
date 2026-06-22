@@ -305,7 +305,7 @@ tr:hover td{background:#FAFCFA}
   <section class="view" id="config">
     <div class="card">
       <div class="eyebrow">Fonte de dados</div><h2 style="margin:6px 0 2px;font-size:20px">Acesso B3 (brapi.dev)</h2>
-      <p class="sub">Cole seu token da brapi.dev. Sem token o scanner ainda lista o universo com preço, mas só PETR4, VALE3 e MGLU3 trazem indicadores completos.</p>
+      <p class="sub">Cole seu token da brapi.dev. Sem token o scanner ainda lista o universo com preço, mas só PETR4, VALE3, MGLU3 e ITUB4 trazem indicadores completos — qualquer outro ticker (ex.: BBAS3, TAEE11) exige token salvo e válido.</p>
       <label>Token brapi</label><input id="cfgToken" placeholder="cole aqui seu token" autocomplete="off">
       <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="testToken">Testar</button><button class="btn sm" id="saveToken">Salvar token</button></div>
     </div>
@@ -797,7 +797,7 @@ function saveCfg(){S.cfg.bazin=parseFloat($('#cfgBazin').value)||6;S.cfg.minDy=p
   save();renderRadar();if(S.fii.at)renderFiis();renderFutures();toast('Critérios atualizados');}
 ['cfgBazin','cfgMinDy','cfgMaxPl','cfgLot','cfgBelow','cfgMinRoe','cfgMaxDebt','cfgFiiMaxPvp','cfgWinMargin','cfgWdoMargin'].forEach(id=>$('#'+id).addEventListener('change',saveCfg));
 $('#saveToken').onclick=()=>{S.token=$('#cfgToken').value.trim();save();syncTokenUI();toast(S.token?'Token salvo':'Token removido');};
-$('#testToken').onclick=async()=>{const tk=$('#cfgToken').value.trim();const h=tk?{Authorization:'Bearer '+tk}:{};try{const r=await fetch(API+'ITUB4?range=1d&interval=1d',{headers:h});const d=await r.json();if(d.results&&d.results[0])toast('OK — ITUB4 '+brl(d.results[0].regularMarketPrice));else toast('Sem dados (verifique o token)');}catch(e){toast('Falha de conexão');}};
+$('#testToken').onclick=async()=>{const tk=$('#cfgToken').value.trim();const h=tk?{Authorization:'Bearer '+tk}:{};try{const r=await fetch(API+'BBAS3?range=1d&interval=1d',{headers:h});const d=await r.json();if(d.results&&d.results[0])toast('Token OK — BBAS3 '+brl(d.results[0].regularMarketPrice));else toast('Token não liberou BBAS3: '+(d.message||d.code||'sem dados'));}catch(e){toast('Falha de conexão');}};
 function openModal(){$('#modalToken').value=S.token||'';$('#modalBg').classList.add('show');}
 $('#tokenPill').onclick=openModal;$('#modalX').onclick=()=>$('#modalBg').classList.remove('show');
 $('#modalBg').onclick=e=>{if(e.target===$('#modalBg'))$('#modalBg').classList.remove('show');};
