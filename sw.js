@@ -4,7 +4,7 @@
    Para atualizar o app depois de mudar arquivos: suba o número
    da versão em CACHE (ex.: jmg-inv-v2) e recarregue.
    ===================================================== */
-const CACHE = 'jmg-inv-v2';
+const CACHE = 'jmg-inv-v4';
 const ASSETS = [
   './',
   './index.html',
