@@ -463,6 +463,7 @@ details.fold .inner{padding-bottom:14px}
    Plano grátis = 200 req/dia, então toda resposta passa por cache com TTL.
    ===================================================================== */
 const LS='jmg_invest_v3';
+const APP_VERSION='2026.09.11-bolsai';
 const BASE='https://api.usebolsai.com/api/v1';
 const TTL={quote:9e5, fund:432e5, div:864e5, fii:864e5, macro:216e5, meta:6048e5, screen:36e5};
 
@@ -694,7 +695,8 @@ function renderCache(){
   const el=$('#cacheKv');if(!el)return;
   const n=Object.keys(S.cache).length;
   const bytes=(()=>{try{return (localStorage.getItem(LS)||'').length;}catch(e){return 0;}})();
-  el.innerHTML=[['Respostas em cache',String(n)],['Requisições hoje',String(S.usage.local||0)],
+  el.innerHTML=[['Versão do app',APP_VERSION],['Respostas em cache',String(n)],
+    ['Requisições hoje',String(S.usage.local||0)],
     ['Tamanho salvo',(bytes/1024).toFixed(0)+' KB'],['Ativos conhecidos',String(Object.keys(S.assets).length)]]
     .map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
 }
@@ -1699,9 +1701,27 @@ $('#refreshRadar').onclick=async e=>{const b=e.currentTarget,o=b.innerHTML;b.inn
 $('#refreshPf').onclick=async e=>{const b=e.currentTarget,o=b.innerHTML;b.innerHTML='<span class="spin dark"></span>';
   await refreshAll({force:true});b.innerHTML=o;toast('Dados atualizados');};
 
-/* ---- SERVICE WORKER (PWA / offline) ---- */
-if('serviceWorker' in navigator){window.addEventListener('load',()=>{
-  navigator.serviceWorker.register('./sw.js').catch(e=>console.log('SW erro:',e));});}
+/* ---- SERVICE WORKER (PWA / offline) ----
+   Com atualização automática: sem isso o celular ficava preso numa build
+   antiga em cache até alguém limpar os dados do site na mão. */
+if('serviceWorker' in navigator){
+  const tinhaControle=!!navigator.serviceWorker.controller;
+  let recarregando=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    /* na primeira instalação não havia controlador: aí o claim() é normal e
+       recarregar seria um susto sem motivo */
+    if(!tinhaControle||recarregando)return;
+    recarregando=true;toast('Nova versão instalada — recarregando…');
+    setTimeout(()=>location.reload(),900);
+  });
+  window.addEventListener('load',async()=>{
+    try{
+      const reg=await navigator.serviceWorker.register('./sw.js');
+      reg.update();
+      setInterval(()=>reg.update(),36e5);   /* procura versão nova de hora em hora */
+    }catch(e){console.log('SW erro:',e);}
+  });
+}
 
 (function init(){
   syncTokenUI();fillCfg();

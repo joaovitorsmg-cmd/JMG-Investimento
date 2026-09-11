@@ -4,7 +4,7 @@
    Para atualizar o app depois de mudar arquivos: suba o número
    da versão em CACHE (ex.: jmg-inv-v2) e recarregue.
    ===================================================== */
-const CACHE = 'jmg-inv-v6';
+const CACHE = 'jmg-inv-v7';
 const ASSETS = [
   './',
   './index.html',
@@ -54,6 +54,20 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Resto (shell do app) — cache primeiro, rede como reserva
-  e.respondWith(caches.match(e.request).then(cached => cached || fetch(e.request)));
+  // Shell do app — REDE PRIMEIRO, cache como reserva offline.
+  // Cache-primeiro (como era até a v6) congelava o celular numa build antiga:
+  // o app só atualizava quando o número da versão acima mudava, e mesmo assim
+  // só no carregamento seguinte. Agora, havendo internet, o que está publicado
+  // é sempre o que aparece; sem internet, o app ainda abre pelo cache.
+  e.respondWith(
+    fetch(e.request)
+      .then(r => {
+        if (r && r.ok && e.request.method === 'GET') {
+          const copy = r.clone();
+          caches.open(CACHE).then(c => c.put(e.request, copy));
+        }
+        return r;
+      })
+      .catch(() => caches.match(e.request).then(c => c || caches.match('./index.html')))
+  );
 });

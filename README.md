@@ -62,7 +62,11 @@ Endpoints de **proventos, balanços e macro são do plano Pro**. No grátis o pa
 O OpenAPI da Bolsai deixa vários schemas abertos, então o painel procura cada métrica por vários nomes de campo possíveis. Em **Config → Diagnóstico da API** ele bate em cada endpoint e imprime os campos que voltaram — compare com a lista `F` no topo do `<script>` e acrescente o nome que faltar.
 
 ## Atualizar o app depois de mudar algo
-Edite o arquivo no GitHub e suba a versão do cache em `sw.js` (ex.: `jmg-inv-v6` → `jmg-inv-v7`). Sem isso, o celular pode continuar mostrando a versão antiga em cache.
+Edite o arquivo no GitHub e pronto: o service worker busca o shell **pela rede primeiro** e só cai no cache quando está offline, então o que está publicado é o que aparece no próximo carregamento. Se o app já estava aberto quando você publicou, ele avisa "Nova versão instalada" e recarrega sozinho.
+
+A versão em execução aparece em **Config → Cache e consumo**. Use isso para conferir se o celular pegou o deploy novo.
+
+> Até a v6 o shell era servido do cache primeiro, e o celular ficava preso numa build antiga até limpar os dados do site na mão. Se algum aparelho ainda estiver assim: exporte o backup em Config, limpe os dados do site no navegador, reabra e importe o JSON.
 
 ## Histórico de fontes de dados
 Rodava em brapi.dev com a HG Brasil como reserva de DY/P-VP; as duas saíram e tudo passou para a Bolsai. Ganhos da migração: o scanner faz **uma** chamada em vez de dezenas, ROE/margem líquida/dívida-patrimônio vêm calculados em vez de aproximados por LPA÷VPA, FIIs ganharam vacância/segmento/inquilinos, e entraram as abas **Ativo** e **Macro**. Perda: os minicontratos **WIN/WDO** eram exclusivos da brapi e a Bolsai não cobre derivativos — aquele card virou o termômetro macro, que serve à mesma decisão (comparar o yield da ordem com a renda fixa).
