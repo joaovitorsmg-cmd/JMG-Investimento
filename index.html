@@ -405,7 +405,9 @@ details.fold .inner{padding-bottom:14px}
       <div class="eyebrow">Fonte de dados</div><h2 style="margin:6px 0 2px;font-size:20px">Chave da API Bolsai</h2>
       <p class="sub">Todo o painel roda em <span class="num">api.usebolsai.com</span>. Crie a conta com Google em <b>usebolsai.com</b>, gere a chave e cole aqui — ela vai no header <span class="num">X-API-Key</span> e fica salva só neste aparelho. Plano grátis: 200 requisições/dia. Endpoints de dividendos, balanços e macro são do plano Pro.</p>
       <label>Chave Bolsai</label><input id="cfgToken" placeholder="cole aqui sua chave" autocomplete="off">
-      <div class="cfg-row" style="margin-top:12px"><div class="lab">Como enviar a chave<small>Header é o documentado. Se o Diagnóstico acusar CORS no preflight, troque para parâmetro.</small></div>
+      <div class="cfg-row" style="margin-top:12px"><div class="lab">Proxy (opcional)<small>Só é necessário se o Diagnóstico acusar que a API não libera navegador. Vazio = fala direto com api.usebolsai.com.</small></div>
+        <input id="cfgProxy" placeholder="https://seu-worker.workers.dev" style="max-width:230px;text-align:left"></div>
+      <div class="cfg-row"><div class="lab">Como enviar a chave<small>Header é o documentado. Se o Diagnóstico acusar CORS no preflight, troque para parâmetro.</small></div>
         <select id="cfgKeyMode"><option value="header">Header X-API-Key</option><option value="query">Parâmetro ?api_key=</option></select></div>
       <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="testToken">Testar</button><button class="btn sm" id="saveToken">Salvar chave</button></div>
       <div class="kv" id="acctKv" style="margin-top:14px"></div>
@@ -465,15 +467,20 @@ details.fold .inner{padding-bottom:14px}
    Plano grátis = 200 req/dia, então toda resposta passa por cache com TTL.
    ===================================================================== */
 const LS='jmg_invest_v3';
-const APP_VERSION='2026.09.11c-bolsai';
-const BASE='https://api.usebolsai.com/api/v1';
+const APP_VERSION='2026.09.11d-bolsai';
+const BOLSAI='https://api.usebolsai.com';
+/* Se um proxy estiver configurado, todas as chamadas passam por ele. É a única
+   saída quando a API não devolve Access-Control-Allow-Origin: o navegador barra
+   a leitura da resposta, e isso não se contorna pelo front-end. */
+const rootBase=()=>(S.cfg.proxyBase||BOLSAI).replace(/\/+$/,'');
+const apiBase=()=>rootBase()+'/api/v1';
 const TTL={quote:9e5, fund:432e5, div:864e5, fii:864e5, macro:216e5, meta:6048e5, screen:36e5};
 
 const seed={
   token:'',
   cfg:{bazin:6,cdiPremium:2,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',
        universe:120,sector:'',profit:1,minRoe:12,maxDebt:2,minMargin:0,fiiMaxPvp:1.05,
-       sort:'market_cap',serverFilter:0,keyMode:'header',
+       sort:'market_cap',serverFilter:0,keyMode:'header',proxyBase:'',
        fiiSegment:'',fiiType:'',fiiMandate:'',fiiMgmt:'',fiiPvpLt:'',fiiDyGt:'',fiiVacLt:'',fiiSort:'dividend_yield_ttm'},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
@@ -563,13 +570,14 @@ function pruneCache(){
 async function api(path,{ttl=0,noKey=false,force=false}={}){
   const hit=S.cache[path];
   if(ttl&&!force&&hit&&Date.now()-hit.at<ttl)return hit.d;
-  if(!S.token&&!noKey)throw new ApiErr('Sem chave Bolsai — cole a sua em Config.',0);
+  /* com proxy a chave pode viver lá dentro, então aqui ela deixa de ser obrigatória */
+  if(!S.token&&!noKey&&!S.cfg.proxyBase)throw new ApiErr('Sem chave Bolsai — cole a sua em Config.',0);
   /* Duas formas de mandar a chave. O header X-API-Key é o documentado, mas
      header custom obriga o navegador a um preflight OPTIONS; se a Bolsai não
      liberar isso para a origem do painel, nenhuma chamada passa. Como GET sem
      header custom não dispara preflight, o modo ?api_key= é a saída — desde
      que a API aceite a chave por query string. O Diagnóstico testa os dois. */
-  let url=BASE+path,headers={};
+  let url=apiBase()+path,headers={};
   if(S.token){
     if(S.cfg.keyMode==='query')url+=(path.includes('?')?'&':'?')+'api_key='+encodeURIComponent(S.token);
     else headers['X-API-Key']=S.token;
@@ -1521,7 +1529,7 @@ window.delPos=i=>{if(confirm('Remover posição '+S.portfolio[i].tk+'?')){S.port
 /* =====================================================================
    CONFIG / CHAVE / BACKUP
    ===================================================================== */
-function syncTokenUI(){const on=!!S.token;$('#tokenDot').classList.toggle('on',on);
+function syncTokenUI(){const on=!!S.token||!!S.cfg.proxyBase;$('#tokenDot').classList.toggle('on',on);
   $('#tokenLabel').textContent=on?'Conectado':'Sem chave';}
 const CFG_INPUTS=['cfgBazin','cfgCdiPremium','cfgMinDy','cfgMaxPl','cfgMinRoe','cfgMaxDebt','cfgMinMargin','cfgFiiMaxPvp','cfgLot','cfgBelow'];
 function fillCfg(){
@@ -1530,7 +1538,7 @@ function fillCfg(){
   $('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;
   $('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;
   $('#cfgMinMargin').value=S.cfg.minMargin;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
-  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;$('#cfgKeyMode').value=S.cfg.keyMode;
+  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;$('#cfgKeyMode').value=S.cfg.keyMode;$('#cfgProxy').value=S.cfg.proxyBase||'';
   $('#fUniverse').value=S.cfg.universe;$('#fSort').value=S.cfg.sort;
   $('#fProfit').value=S.cfg.profit;$('#fServerFilter').value=S.cfg.serverFilter;
   $('#fiiType').value=S.cfg.fiiType;$('#fiiMandate').value=S.cfg.fiiMandate;$('#fiiMgmt').value=S.cfg.fiiMgmt;
@@ -1561,28 +1569,42 @@ async function runDiag(){
   const out=$('#diagOut');out.style.display='block';out.textContent='Rodando diagnóstico…';
   /* Chamada simples (sem header custom) não dispara preflight; a com X-API-Key
      dispara OPTIONS. Comparar as duas diz se o problema é a API ou o CORS. */
+  /* no-cors não exige Access-Control-Allow-Origin: a resposta vem opaca (não dá
+     para ler), mas só rejeita se o servidor não respondeu mesmo. É isso que
+     separa "host fora do ar" de "host no ar, sem CORS" — um fetch normal falha
+     igual nos dois casos, e foi por isso que a sonda anterior não concluiu. */
+  const alcance=async(u,rot)=>{
+    try{await fetch(u,{mode:'no-cors',cache:'no-store'});return `${rot}: respondeu`;}
+    catch(e){return `${rot}: inalcançável — ${e.message}`;}
+  };
   const probe=[];
+  probe.push('navegador online: '+(navigator.onLine?'sim':'NÃO'));
+  probe.push(await alcance('https://usebolsai.com/','alcance de usebolsai.com'));
+  probe.push(await alcance(rootBase()+'/health','alcance de '+rootBase()));
   try{
-    const r=await fetch(BASE.replace('/api/v1','')+'/health',{method:'GET'});
-    probe.push(`sem header custom (/health): HTTP ${r.status}`);
-  }catch(e){probe.push('sem header custom (/health): BLOQUEADO — '+e.message);}
+    const r=await fetch(rootBase()+'/health',{method:'GET'});
+    probe.push(`leitura sem header custom (/health): HTTP ${r.status}`);
+  }catch(e){probe.push('leitura sem header custom (/health): BLOQUEADO — '+e.message);}
   try{
-    const r=await fetch(BASE+'/screener/?limit=1',{headers:{'X-API-Key':S.token||'sem-chave'}});
-    probe.push(`com header X-API-Key: HTTP ${r.status}`);
-  }catch(e){probe.push('com header X-API-Key: BLOQUEADO — '+e.message);}
+    const r=await fetch(apiBase()+'/screener/?limit=1',{headers:{'X-API-Key':S.token||'sem-chave'}});
+    probe.push(`leitura com header X-API-Key: HTTP ${r.status}`);
+  }catch(e){probe.push('leitura com header X-API-Key: BLOQUEADO — '+e.message);}
   try{
-    const r=await fetch(BASE+'/screener/?limit=1&api_key='+encodeURIComponent(S.token||'sem-chave'));
-    probe.push(`com ?api_key= (sem preflight): HTTP ${r.status}`);
-  }catch(e){probe.push('com ?api_key= (sem preflight): BLOQUEADO — '+e.message);}
-  const chegou=i=>/HTTP \d/.test(probe[i]);
-  const simplesOk=chegou(0),headerOk=chegou(1),queryOk=chegou(2);
-  const veredito=(!simplesOk&&!headerOk&&!queryOk)
-      ? 'VEREDITO: nenhuma chamada chegou. É rede do aparelho ou a Bolsai fora do ar — não é a sua chave.'
+    const r=await fetch(apiBase()+'/screener/?limit=1&api_key='+encodeURIComponent(S.token||'sem-chave'));
+    probe.push(`leitura com ?api_key= (sem preflight): HTTP ${r.status}`);
+  }catch(e){probe.push('leitura com ?api_key= (sem preflight): BLOQUEADO — '+e.message);}
+  const hostNoAr=/respondeu$/.test(probe[2]);
+  const leu=i=>/HTTP \d/.test(probe[i]);
+  const simplesOk=leu(3),headerOk=leu(4),queryOk=leu(5);
+  const veredito=!hostNoAr
+      ? 'VEREDITO: o host da API não respondeu nem em modo no-cors. É rede/DNS do aparelho ou a Bolsai fora do ar — nada a corrigir no painel; tente de novo mais tarde.'
+    :(!simplesOk&&!headerOk&&!queryOk)
+      ? 'VEREDITO: o servidor RESPONDE, mas o navegador não deixa ler nenhuma resposta — a API não manda Access-Control-Allow-Origin. Ou seja: a Bolsai não libera chamadas vindas de navegador. Isso NÃO se corrige no front-end. Saídas: (a) pedir à Bolsai que libere a origem do painel, ou (b) apontar Config → Proxy para um proxy seu que repasse as chamadas (worker.js está no repositório, com instruções no README).'
     :(!headerOk&&queryOk)
       ? 'VEREDITO: CORS no preflight do header X-API-Key — mas ?api_key= passa. CONTORNO: em Config, mude "Como enviar a chave" para "Parâmetro ?api_key=" e o painel volta a funcionar.'
     :(!headerOk&&simplesOk)
-      ? 'VEREDITO: a API responde, mas some quando vai o header X-API-Key, e ?api_key= também não passa. É CORS e a correção é do lado da Bolsai (liberar a origem do painel) — nenhuma mudança aqui resolve.'
-      : 'VEREDITO: as chamadas chegam à API. Se algo falha, é status HTTP, não bloqueio — veja os endpoints abaixo.';
+      ? 'VEREDITO: a API responde e libera chamadas simples, mas barra o header X-API-Key e o ?api_key= também não passa. É CORS no preflight — use o proxy (item b acima) ou peça à Bolsai que libere o header.'
+      : 'VEREDITO: as chamadas chegam e podem ser lidas. Se algo falha, é status HTTP, não bloqueio — veja os endpoints abaixo.';
   out.textContent=['SONDA DE CONECTIVIDADE',...probe,'',veredito,'','ENDPOINTS','rodando…'].join('\n');
   await sleep(150);
   const tests=[
@@ -1717,6 +1739,9 @@ $('#testToken').onclick=async()=>{
   }catch(e){toast(e.message);}
   S.token=prev;
 };
+$('#cfgProxy').addEventListener('change',e=>{
+  S.cfg.proxyBase=e.target.value.trim().replace(/\/+$/,'');S.cache={};save();syncTokenUI();
+  toast(S.cfg.proxyBase?'Chamadas passam a ir por '+S.cfg.proxyBase:'Chamadas voltam a ir direto à Bolsai');});
 $('#cfgKeyMode').addEventListener('change',e=>{S.cfg.keyMode=e.target.value;S.cache={};save();
   toast('Chave passa a ir '+(e.target.value==='query'?'como ?api_key=':'no header X-API-Key')+'. Cache limpo.');});
 $('#refreshUsage').onclick=()=>readUsage(false);

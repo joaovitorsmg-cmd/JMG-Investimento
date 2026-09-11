@@ -59,11 +59,19 @@ O plano grátis da Bolsai dá **200 requisições/dia**, então o painel cacheia
 Endpoints de **proventos, balanços e macro são do plano Pro**. No grátis o painel segue funcionando: preço, fundamentos, screener de ações e de FIIs respondem, e o DPA pode ser lançado à mão em *Minha lista*.
 
 ### Se tudo falhar de uma vez
-Rode **Config → Diagnóstico da API**. Ele começa por uma sonda de conectividade que faz três chamadas — uma sem header custom, uma com `X-API-Key` e uma com `?api_key=` — e conclui qual é o caso:
+Rode **Config → Diagnóstico da API**. A sonda de conectividade testa o host em modo `no-cors` (que não exige CORS e só falha se o servidor não responder) e depois tenta ler de três formas — sem header custom, com `X-API-Key` e com `?api_key=`:
 
-- nenhuma chega → rede do aparelho ou a Bolsai fora do ar;
-- só a do header falha → **CORS no preflight** do `X-API-Key`. Se a de `?api_key=` passar, troque **Config → Como enviar a chave** para *Parâmetro `?api_key=`* e o painel volta a funcionar. Se nenhuma das duas passar, só a Bolsai resolve, liberando a origem do painel;
-- todas chegam → é status HTTP, e a lista de endpoints logo abaixo mostra qual.
+- **host inalcançável** → rede/DNS do aparelho ou Bolsai fora do ar. Nada a corrigir aqui;
+- **host responde, mas nenhuma leitura passa** → a API não manda `Access-Control-Allow-Origin`, isto é, não aceita chamadas de navegador. Não há correção possível no front-end: use o **proxy** (abaixo) ou peça à Bolsai que libere a origem do painel;
+- **só a do header falha** → CORS no preflight do `X-API-Key`. Se `?api_key=` passar, troque **Config → Como enviar a chave** para *Parâmetro `?api_key=`*;
+- **todas leem** → é status HTTP, e a lista de endpoints logo abaixo mostra qual.
+
+> Atenção a um engano fácil: um GET "simples" sem header custom **também** precisa de `Access-Control-Allow-Origin` na resposta. O preflight é uma exigência *adicional* dos headers custom, não a única.
+
+### Proxy (quando a API não aceita navegador)
+`worker.js` é um Cloudflare Worker pronto: repassa as chamadas para `api.usebolsai.com` e devolve com o cabeçalho de CORS que falta. Plano grátis basta, deploy em ~5 min — as instruções estão no topo do arquivo. Depois é só preencher **Config → Proxy** com a URL do worker.
+
+Guardando a chave como *Secret* `BOLSAI_KEY` no worker, ela passa a viver só lá: some do localStorage do celular e não trafega mais do navegador. Nesse caso o campo de chave do painel pode ficar vazio.
 
 > Até a v7 o service worker devolvia um 503 sintético quando a chamada falhava, então falta de rede, DNS e bloqueio de CORS apareciam todos como "Bolsai fora do ar (503)". Agora a chamada sai direto pelo navegador e o erro real aparece como erro real.
 
