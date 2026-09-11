@@ -65,8 +65,23 @@ jobs:
           key: bolsai-data-${{ github.run_id }}
           restore-keys: bolsai-data-
 
+      - name: Verificar feriado nacional
+        id: feriado
+        run: |
+          HOJE=$(TZ=America/Sao_Paulo date +%Y-%m-%d)
+          ANO=$(TZ=America/Sao_Paulo date +%Y)
+          FERIADOS=$(curl -sf "https://brasilapi.com.br/api/feriados/v1/$ANO" \
+            | grep -o '"date":"[^"]*"' | grep -o '[0-9-]*') || FERIADOS=""
+          if echo "$FERIADOS" | grep -q "^$HOJE$"; then
+            echo "Hoje ($HOJE) é feriado nacional — pulando snapshot."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Buscar dados na Bolsai
         id: snapshot
+        if: steps.feriado.outputs.skip != 'true'
         continue-on-error: true
         env:
           BOLSAI_API_KEY: ${{ secrets.BOLSAI_API_KEY }}
