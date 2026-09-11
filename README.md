@@ -1,6 +1,17 @@
 # JMG Investimentos — Painel
 
-App pessoal (PWA) de renda passiva e valor na B3: scanner de ações e FIIs, alocador de ordem de compra, carteira e lista de acompanhamento. Dados ao vivo via [brapi.dev](https://brapi.dev).
+App pessoal (PWA) de renda passiva e valor na B3: scanner de ações e de FIIs, raio-X por ativo, termômetro macro, alocador de ordem de compra, carteira e lista de acompanhamento. Dados via [Bolsai](https://usebolsai.com) (`api.usebolsai.com`).
+
+## Abas
+| Aba | O que faz |
+|---|---|
+| **Alocador** | Informe o valor disponível → ordem de compra pronta (o que comprar, quantas cotas), com renda anual estimada e comparação com a Selic/CDI |
+| **Ações** | Screener da B3 numa requisição: P/L, P/VP, ROE, margem líquida, EV/EBITDA, dívida/PL, DY — com ranking de renda, de valor e universo ordenável |
+| **FIIs** | Screener de FIIs: P/VP, DY 12m, VP/cota, vacância, segmento, tipo, mandato e gestão |
+| **Ativo** | Raio-X de ação ou FII: faixa de 52 semanas, trajetória de preço, proventos pagos, fundamentos trimestrais, eventos corporativos, cadastro CVM, inquilinos (FII) |
+| **Macro** | Selic, CDI, IPCA, IGP-M e dólar PTAX, com acumulado composto para as séries de inflação |
+| **Minha lista** | Watchlist com alvo manual, teto de Bazin ou preço de Graham |
+| **Carteira** | Posição, resultado, dividendos/ano estimados e yield on cost vs. renda fixa |
 
 ## Arquivos
 ```
@@ -36,14 +47,25 @@ Depois ative o Pages como no passo 3.
 Depois de instalado, abre em tela cheia e funciona offline (as cotações precisam de internet).
 
 ## Conectar os dados (1ª vez)
-1. Abra o app → toque no cadeado **"Sem token"** no topo.
-2. Cole seu token da brapi.dev → **Salvar e conectar**.
-3. Vá em **Scanner B3 → Escanear B3**.
+1. Crie a conta com Google em **usebolsai.com** e gere sua chave de API.
+2. Abra o app → toque em **"Sem chave"** no topo → cole a chave → **Salvar e conectar**.
+3. Vá em **Ações → Escanear B3**.
 
-> O token e seus dados ficam salvos no aparelho (localStorage). No GitHub Pages persistem entre visitas; se abrir o arquivo baixado direto, pode pedir o token de novo.
+> A chave e seus dados ficam salvos só no aparelho (localStorage) e a chave vai no header `X-API-Key`. No GitHub Pages persistem entre visitas; se abrir o arquivo baixado direto, pode pedir a chave de novo.
+
+### Cota da API
+O plano grátis da Bolsai dá **200 requisições/dia**, então o painel cacheia cada resposta: cotação 15 min, fundamentos 12 h, proventos e FIIs 24 h, macro 6 h, setores 7 dias. O contador no topo mostra quanto resta, e **Config → Cache e consumo** permite limpar o cache ou reler a cota. Mudar critérios (DY mínimo, ROE, P/L, dívida) **re-ranqueia o universo já baixado sem gastar requisição**.
+
+Endpoints de **proventos, balanços e macro são do plano Pro**. No grátis o painel segue funcionando: preço, fundamentos, screener de ações e de FIIs respondem, e o DPA pode ser lançado à mão em *Minha lista*.
+
+### Se alguma coluna aparecer vazia
+O OpenAPI da Bolsai deixa vários schemas abertos, então o painel procura cada métrica por vários nomes de campo possíveis. Em **Config → Diagnóstico da API** ele bate em cada endpoint e imprime os campos que voltaram — compare com a lista `F` no topo do `<script>` e acrescente o nome que faltar.
 
 ## Atualizar o app depois de mudar algo
-Edite o arquivo no GitHub e suba a versão do cache em `sw.js` (ex.: `jmg-inv-v1` → `jmg-inv-v2`). Sem isso, o celular pode continuar mostrando a versão antiga em cache.
+Edite o arquivo no GitHub e suba a versão do cache em `sw.js` (ex.: `jmg-inv-v6` → `jmg-inv-v7`). Sem isso, o celular pode continuar mostrando a versão antiga em cache.
+
+## Histórico de fontes de dados
+Rodava em brapi.dev com a HG Brasil como reserva de DY/P-VP; as duas saíram e tudo passou para a Bolsai. Ganhos da migração: o scanner faz **uma** chamada em vez de dezenas, ROE/margem líquida/dívida-patrimônio vêm calculados em vez de aproximados por LPA÷VPA, FIIs ganharam vacância/segmento/inquilinos, e entraram as abas **Ativo** e **Macro**. Perda: os minicontratos **WIN/WDO** eram exclusivos da brapi e a Bolsai não cobre derivativos — aquele card virou o termômetro macro, que serve à mesma decisão (comparar o yield da ordem com a renda fixa).
 
 ---
 *Ferramenta de organização e estudo. Não é recomendação de investimento.*
