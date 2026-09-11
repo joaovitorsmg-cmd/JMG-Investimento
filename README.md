@@ -58,6 +58,15 @@ O plano grátis da Bolsai dá **200 requisições/dia**, então o painel cacheia
 
 Endpoints de **proventos, balanços e macro são do plano Pro**. No grátis o painel segue funcionando: preço, fundamentos, screener de ações e de FIIs respondem, e o DPA pode ser lançado à mão em *Minha lista*.
 
+### Se tudo falhar de uma vez
+Rode **Config → Diagnóstico da API**. Ele começa por uma sonda de conectividade que faz três chamadas — uma sem header custom, uma com `X-API-Key` e uma com `?api_key=` — e conclui qual é o caso:
+
+- nenhuma chega → rede do aparelho ou a Bolsai fora do ar;
+- só a do header falha → **CORS no preflight** do `X-API-Key`. Se a de `?api_key=` passar, troque **Config → Como enviar a chave** para *Parâmetro `?api_key=`* e o painel volta a funcionar. Se nenhuma das duas passar, só a Bolsai resolve, liberando a origem do painel;
+- todas chegam → é status HTTP, e a lista de endpoints logo abaixo mostra qual.
+
+> Até a v7 o service worker devolvia um 503 sintético quando a chamada falhava, então falta de rede, DNS e bloqueio de CORS apareciam todos como "Bolsai fora do ar (503)". Agora a chamada sai direto pelo navegador e o erro real aparece como erro real.
+
 ### Se alguma coluna aparecer vazia
 O OpenAPI da Bolsai deixa vários schemas abertos, então o painel procura cada métrica por vários nomes de campo possíveis. Em **Config → Diagnóstico da API** ele bate em cada endpoint e imprime os campos que voltaram — compare com a lista `F` no topo do `<script>` e acrescente o nome que faltar.
 

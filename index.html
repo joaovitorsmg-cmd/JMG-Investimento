@@ -405,6 +405,8 @@ details.fold .inner{padding-bottom:14px}
       <div class="eyebrow">Fonte de dados</div><h2 style="margin:6px 0 2px;font-size:20px">Chave da API Bolsai</h2>
       <p class="sub">Todo o painel roda em <span class="num">api.usebolsai.com</span>. Crie a conta com Google em <b>usebolsai.com</b>, gere a chave e cole aqui — ela vai no header <span class="num">X-API-Key</span> e fica salva só neste aparelho. Plano grátis: 200 requisições/dia. Endpoints de dividendos, balanços e macro são do plano Pro.</p>
       <label>Chave Bolsai</label><input id="cfgToken" placeholder="cole aqui sua chave" autocomplete="off">
+      <div class="cfg-row" style="margin-top:12px"><div class="lab">Como enviar a chave<small>Header é o documentado. Se o Diagnóstico acusar CORS no preflight, troque para parâmetro.</small></div>
+        <select id="cfgKeyMode"><option value="header">Header X-API-Key</option><option value="query">Parâmetro ?api_key=</option></select></div>
       <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="testToken">Testar</button><button class="btn sm" id="saveToken">Salvar chave</button></div>
       <div class="kv" id="acctKv" style="margin-top:14px"></div>
     </div>
@@ -463,7 +465,7 @@ details.fold .inner{padding-bottom:14px}
    Plano grátis = 200 req/dia, então toda resposta passa por cache com TTL.
    ===================================================================== */
 const LS='jmg_invest_v3';
-const APP_VERSION='2026.09.11-bolsai';
+const APP_VERSION='2026.09.11c-bolsai';
 const BASE='https://api.usebolsai.com/api/v1';
 const TTL={quote:9e5, fund:432e5, div:864e5, fii:864e5, macro:216e5, meta:6048e5, screen:36e5};
 
@@ -471,7 +473,7 @@ const seed={
   token:'',
   cfg:{bazin:6,cdiPremium:2,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',
        universe:120,sector:'',profit:1,minRoe:12,maxDebt:2,minMargin:0,fiiMaxPvp:1.05,
-       sort:'market_cap',serverFilter:0,
+       sort:'market_cap',serverFilter:0,keyMode:'header',
        fiiSegment:'',fiiType:'',fiiMandate:'',fiiMgmt:'',fiiPvpLt:'',fiiDyGt:'',fiiVacLt:'',fiiSort:'dividend_yield_ttm'},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
@@ -527,6 +529,14 @@ class ApiErr extends Error{
   constructor(msg,status){super(msg);this.status=status;
     this.pro=status===403;this.quota=status===429;this.missing=status===404;}
 }
+/* fetch rejeitado = nenhuma resposta chegou. Sem internet, API fora do ar e
+   bloqueio de CORS caem todos aqui e o navegador não deixa distingui-los pelo
+   JS — daí o Diagnóstico, que compara uma chamada simples com uma com chave. */
+function netMsg(){
+  if(typeof navigator!=='undefined'&&navigator.onLine===false)
+    return 'Sem internet no aparelho.';
+  return 'Não consegui falar com a Bolsai: API fora do ar, ou o navegador bloqueou a chamada (CORS). Rode o Diagnóstico em Config para saber qual dos dois.';
+}
 function httpMsg(st,detail){
   if(st===401)return 'Chave Bolsai inválida ou ausente (401). Confira em Config.';
   if(st===403)return 'Endpoint do plano Pro ou fora da sua permissão (403).';
@@ -554,9 +564,19 @@ async function api(path,{ttl=0,noKey=false,force=false}={}){
   const hit=S.cache[path];
   if(ttl&&!force&&hit&&Date.now()-hit.at<ttl)return hit.d;
   if(!S.token&&!noKey)throw new ApiErr('Sem chave Bolsai — cole a sua em Config.',0);
+  /* Duas formas de mandar a chave. O header X-API-Key é o documentado, mas
+     header custom obriga o navegador a um preflight OPTIONS; se a Bolsai não
+     liberar isso para a origem do painel, nenhuma chamada passa. Como GET sem
+     header custom não dispara preflight, o modo ?api_key= é a saída — desde
+     que a API aceite a chave por query string. O Diagnóstico testa os dois. */
+  let url=BASE+path,headers={};
+  if(S.token){
+    if(S.cfg.keyMode==='query')url+=(path.includes('?')?'&':'?')+'api_key='+encodeURIComponent(S.token);
+    else headers['X-API-Key']=S.token;
+  }
   let r;
-  try{ r=await fetch(BASE+path,{headers:S.token?{'X-API-Key':S.token}:{}}); }
-  catch(e){ throw new ApiErr('Falha de conexão com a Bolsai. Verifique a internet.',0); }
+  try{ r=await fetch(url,{headers}); }
+  catch(e){ throw new ApiErr(netMsg(),0); }
   bumpLocal();
   let d=null;try{d=await r.json();}catch(e){}
   if(!r.ok){
@@ -678,11 +698,11 @@ async function readUsage(silent){
     S.usage.used=pnum(d,['used_today','used']);
     S.usage.limit=pnum(d,['daily_limit','limit']);
     S.usage.remaining=pnum(d,['remaining','left']);
-    S.usage.at=Date.now();save();renderUsage();renderAcct(d);
+    S.usage.at=Date.now();save();renderUsage();renderAcct();
     if(!silent)toast(`Plano ${S.usage.tier||'?'} · ${S.usage.remaining} de ${S.usage.limit} restantes hoje`);
   }catch(e){if(!silent)toast(e.message);}
 }
-function renderAcct(d){
+function renderAcct(){
   const el=$('#acctKv');if(!el)return;
   if(!S.token){el.innerHTML='<div><div class="k">Status</div><div class="v sm">Sem chave salva</div></div>';return;}
   const u=S.usage;
@@ -1510,7 +1530,7 @@ function fillCfg(){
   $('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;
   $('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;
   $('#cfgMinMargin').value=S.cfg.minMargin;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
-  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;
+  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;$('#cfgKeyMode').value=S.cfg.keyMode;
   $('#fUniverse').value=S.cfg.universe;$('#fSort').value=S.cfg.sort;
   $('#fProfit').value=S.cfg.profit;$('#fServerFilter').value=S.cfg.serverFilter;
   $('#fiiType').value=S.cfg.fiiType;$('#fiiMandate').value=S.cfg.fiiMandate;$('#fiiMgmt').value=S.cfg.fiiMgmt;
@@ -1539,6 +1559,32 @@ function saveCfg(){
 }
 async function runDiag(){
   const out=$('#diagOut');out.style.display='block';out.textContent='Rodando diagnóstico…';
+  /* Chamada simples (sem header custom) não dispara preflight; a com X-API-Key
+     dispara OPTIONS. Comparar as duas diz se o problema é a API ou o CORS. */
+  const probe=[];
+  try{
+    const r=await fetch(BASE.replace('/api/v1','')+'/health',{method:'GET'});
+    probe.push(`sem header custom (/health): HTTP ${r.status}`);
+  }catch(e){probe.push('sem header custom (/health): BLOQUEADO — '+e.message);}
+  try{
+    const r=await fetch(BASE+'/screener/?limit=1',{headers:{'X-API-Key':S.token||'sem-chave'}});
+    probe.push(`com header X-API-Key: HTTP ${r.status}`);
+  }catch(e){probe.push('com header X-API-Key: BLOQUEADO — '+e.message);}
+  try{
+    const r=await fetch(BASE+'/screener/?limit=1&api_key='+encodeURIComponent(S.token||'sem-chave'));
+    probe.push(`com ?api_key= (sem preflight): HTTP ${r.status}`);
+  }catch(e){probe.push('com ?api_key= (sem preflight): BLOQUEADO — '+e.message);}
+  const chegou=i=>/HTTP \d/.test(probe[i]);
+  const simplesOk=chegou(0),headerOk=chegou(1),queryOk=chegou(2);
+  const veredito=(!simplesOk&&!headerOk&&!queryOk)
+      ? 'VEREDITO: nenhuma chamada chegou. É rede do aparelho ou a Bolsai fora do ar — não é a sua chave.'
+    :(!headerOk&&queryOk)
+      ? 'VEREDITO: CORS no preflight do header X-API-Key — mas ?api_key= passa. CONTORNO: em Config, mude "Como enviar a chave" para "Parâmetro ?api_key=" e o painel volta a funcionar.'
+    :(!headerOk&&simplesOk)
+      ? 'VEREDITO: a API responde, mas some quando vai o header X-API-Key, e ?api_key= também não passa. É CORS e a correção é do lado da Bolsai (liberar a origem do painel) — nenhuma mudança aqui resolve.'
+      : 'VEREDITO: as chamadas chegam à API. Se algo falha, é status HTTP, não bloqueio — veja os endpoints abaixo.';
+  out.textContent=['SONDA DE CONECTIVIDADE',...probe,'',veredito,'','ENDPOINTS','rodando…'].join('\n');
+  await sleep(150);
   const tests=[
     ['GET /keys/usage','/keys/usage?api_key='+encodeURIComponent(S.token||'')],
     ['GET /companies/sectors','/companies/sectors'],
@@ -1550,7 +1596,7 @@ async function runDiag(){
     ['GET /fiis/screener?limit=1','/fiis/screener?limit=1'],
     ['GET /macro/','/macro/'],
   ];
-  const lines=[];
+  const lines=['SONDA DE CONECTIVIDADE',...probe,'',veredito,'','ENDPOINTS'];
   for(const [label,path] of tests){
     try{
       const d=await api(path);
@@ -1656,9 +1702,9 @@ $('#cdiToBazin').onclick=()=>{
   toast(`Meta de yield = ${r.name} ${n2(r.val)}% + ${n2(+S.cfg.cdiPremium)}% = ${n2(S.cfg.bazin)}%`);
 };
 $('#saveToken').onclick=async()=>{
-  S.token=$('#cfgToken').value.trim();save();syncTokenUI();
+  S.token=$('#cfgToken').value.trim();save();syncTokenUI();renderAcct();
   toast(S.token?'Chave salva':'Chave removida');
-  if(S.token){await readUsage(true);await refreshAll();}
+  if(S.token){await readUsage(true);renderAcct();await refreshAll();}
 };
 $('#testToken').onclick=async()=>{
   const k=$('#cfgToken').value.trim();if(!k){toast('Cole a chave antes de testar');return;}
@@ -1671,6 +1717,8 @@ $('#testToken').onclick=async()=>{
   }catch(e){toast(e.message);}
   S.token=prev;
 };
+$('#cfgKeyMode').addEventListener('change',e=>{S.cfg.keyMode=e.target.value;S.cache={};save();
+  toast('Chave passa a ir '+(e.target.value==='query'?'como ?api_key=':'no header X-API-Key')+'. Cache limpo.');});
 $('#refreshUsage').onclick=()=>readUsage(false);
 $('#clearCache').onclick=()=>{S.cache={};save();renderCache();toast('Cache limpo — próximas consultas vão à API');};
 $('#diagBtn').onclick=runDiag;
@@ -1680,8 +1728,8 @@ $('#modalX').onclick=()=>$('#modalBg').classList.remove('show');
 $('#modalBg').onclick=e=>{if(e.target===$('#modalBg'))$('#modalBg').classList.remove('show');};
 $('#modalSave').onclick=async()=>{
   S.token=$('#modalToken').value.trim();$('#cfgToken').value=S.token;save();syncTokenUI();
-  $('#modalBg').classList.remove('show');toast('Conectado');
-  if(S.token){await readUsage(true);await refreshAll();}
+  $('#modalBg').classList.remove('show');toast('Conectado');renderAcct();
+  if(S.token){await readUsage(true);renderAcct();await refreshAll();}
 };
 $('#exportBtn').onclick=()=>{
   const out={...S,cache:{}};
