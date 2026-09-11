@@ -402,7 +402,16 @@ details.fold .inner{padding-bottom:14px}
   <!-- CONFIG -->
   <section class="view" id="config">
     <div class="card">
-      <div class="eyebrow">Fonte de dados</div><h2 style="margin:6px 0 2px;font-size:20px">Chave da API Bolsai</h2>
+      <div class="eyebrow">De onde vêm os números</div><h2 style="margin:6px 0 2px;font-size:20px">Fonte de dados</h2>
+      <p class="sub">A Bolsai não aceita chamadas de navegador — ela responde, mas sem <span class="num">Access-Control-Allow-Origin</span>, e aí o navegador barra a leitura. Então quem busca é o <b>GitHub Actions</b>, no servidor, e publica o resultado como JSON ao lado do painel. Mesma origem: sem CORS, sem chave no aparelho, sem cota gasta aqui.</p>
+      <div class="cfg-row"><div class="lab">Modo<small>Automático lê o snapshot publicado. Ao vivo só funciona com proxy configurado abaixo.</small></div>
+        <select id="cfgFonte"><option value="auto">Automático (snapshot)</option><option value="live">Sempre ao vivo</option></select></div>
+      <div class="kv" id="snapKv" style="margin-top:14px"></div>
+      <div id="snapNota"></div>
+      <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="snapReload">↻ Recarregar snapshot</button></div>
+    </div>
+    <div class="card">
+      <div class="eyebrow">Modo ao vivo (opcional)</div><h2 style="margin:6px 0 2px;font-size:20px">Chave da API Bolsai</h2>
       <p class="sub">Todo o painel roda em <span class="num">api.usebolsai.com</span>. Crie a conta com Google em <b>usebolsai.com</b>, gere a chave e cole aqui — ela vai no header <span class="num">X-API-Key</span> e fica salva só neste aparelho. Plano grátis: 200 requisições/dia. Endpoints de dividendos, balanços e macro são do plano Pro.</p>
       <label>Chave Bolsai</label><input id="cfgToken" placeholder="cole aqui sua chave" autocomplete="off">
       <div class="cfg-row" style="margin-top:12px"><div class="lab">Proxy (opcional)<small>Só é necessário se o Diagnóstico acusar que a API não libera navegador. Vazio = fala direto com api.usebolsai.com.</small></div>
@@ -467,7 +476,7 @@ details.fold .inner{padding-bottom:14px}
    Plano grátis = 200 req/dia, então toda resposta passa por cache com TTL.
    ===================================================================== */
 const LS='jmg_invest_v3';
-const APP_VERSION='2026.09.11d-bolsai';
+const APP_VERSION='2026.09.12-snapshot';
 const BOLSAI='https://api.usebolsai.com';
 /* Se um proxy estiver configurado, todas as chamadas passam por ele. É a única
    saída quando a API não devolve Access-Control-Allow-Origin: o navegador barra
@@ -480,7 +489,7 @@ const seed={
   token:'',
   cfg:{bazin:6,cdiPremium:2,minDy:5,maxPl:12,lot:1,below:1,split:60,mode:'diversificar',src:'ambos',
        universe:120,sector:'',profit:1,minRoe:12,maxDebt:2,minMargin:0,fiiMaxPvp:1.05,
-       sort:'market_cap',serverFilter:0,keyMode:'header',proxyBase:'',
+       sort:'market_cap',serverFilter:0,keyMode:'header',proxyBase:'',fonte:'auto',
        fiiSegment:'',fiiType:'',fiiMandate:'',fiiMgmt:'',fiiPvpLt:'',fiiDyGt:'',fiiVacLt:'',fiiSort:'dividend_yield_ttm'},
   watch:[
     {tk:'ITUB4',nm:'Itaú Unibanco',bkt:'rp',target:0,dpa:0},
@@ -530,6 +539,81 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const today=()=>new Date().toISOString().slice(0,10);
 
 /* =====================================================================
+   SNAPSHOT — dados estáticos publicados pelo GitHub Actions
+   ---------------------------------------------------------------------
+   A api.usebolsai.com responde mas não manda Access-Control-Allow-Origin,
+   então nenhum navegador lê a resposta. A Action busca os dados no
+   servidor (onde CORS não existe) e publica JSON na MESMA origem do
+   painel — e aqui ler é trivial. Sem chave no aparelho, sem cota.
+
+   O roteamento acontece dentro de api(): cada rota da Bolsai tem um
+   equivalente no snapshot, então nenhuma tela precisou saber disso.
+   ===================================================================== */
+const SNAP_DIR='./data';
+const SNAP={ok:false,meta:null,err:''};
+const snapMem=new Map();
+async function snapGet(rel){
+  const r=await fetch(`${SNAP_DIR}/${rel}`,{cache:'no-cache'});
+  if(!r.ok)throw new ApiErr(rel.startsWith('ativos/')
+    ? `${rel.slice(7,-5)} não está no raio-X do snapshot (aumente "detalhe" na Action, ou use o modo ao vivo).`
+    : `Snapshot sem ${rel} (HTTP ${r.status}).`, r.status);
+  return r.json();
+}
+/* guarda a promessa: o raio-X faz várias leituras do mesmo arquivo e isso
+   as transforma numa requisição só */
+function snapFile(rel){
+  if(snapMem.has(rel))return snapMem.get(rel);
+  const p=snapGet(rel).catch(e=>{snapMem.delete(rel);throw e;});
+  snapMem.set(rel,p);return p;
+}
+const DET_MAP={'stocks/quote':'quote','stocks/stats':'stats','stocks/history':'history',
+  'stocks/corporate-events':'events','fundamentals':'fundamentals','fundamentals/history':'fundamentalsHistory',
+  'dividends':'dividends','companies':'company','fiis':'fii','fiis/distributions':'distributions',
+  'fiis/history':'fiiHistory','fiis/tenants':'tenants'};
+/* devolve os dados, ou undefined quando a rota não tem equivalente no
+   snapshot (aí a chamada segue para a API, se houver como) */
+async function snapResolve(path){
+  const p=path.split('?')[0];
+  if(p==='/companies/sectors')return snapFile('setores.json');
+  if(p.startsWith('/screener/'))return snapFile('acoes.json');
+  if(p.startsWith('/fiis/screener'))return snapFile('fiis.json');
+  if(p==='/macro/'){
+    const m=await snapFile('macro.json');
+    return {series:Object.keys(m.series||{}).map(name=>({name}))};
+  }
+  const mm=p.match(/^\/macro\/(.+)$/);
+  if(mm){
+    if(/\/stats$/.test(mm[1]))return undefined;      /* o painel calcula o que precisa dos pontos */
+    const nome=decodeURIComponent(mm[1]);
+    const m=await snapFile('macro.json');
+    const dados=(m.series||{})[nome];
+    if(!dados)throw new ApiErr(`Snapshot sem a série ${nome}.`,404);
+    return {series:nome,data:dados};
+  }
+  const t=p.match(/^\/(stocks|fiis|fundamentals|dividends|companies)\/([A-Za-z0-9]+)(?:\/([a-z-]+))?$/);
+  if(t){
+    const campo=DET_MAP[t[1]+(t[3]?'/'+t[3]:'')];
+    if(!campo)return undefined;
+    const det=await snapFile(`ativos/${t[2].toUpperCase()}.json`);
+    const v=det[campo];
+    if(v===undefined)throw new ApiErr(`O snapshot de ${t[2].toUpperCase()} não inclui ${campo}.`,404);
+    return v;
+  }
+  return undefined;
+}
+async function snapInit(){
+  try{
+    const m=await snapGet('meta.json');
+    SNAP.meta=m;SNAP.ok=!!m.gerado_em;
+    SNAP.err=SNAP.ok?'':((m.erros||[])[0]||'snapshot ainda não gerado');
+  }catch(e){SNAP.ok=false;SNAP.err=e.message;}
+  return SNAP.ok;
+}
+const usaSnap=()=>S.cfg.fonte!=='live'&&SNAP.ok;
+const podeLive=()=>!!S.token||!!S.cfg.proxyBase;
+const temDados=()=>usaSnap()||podeLive();
+
+/* =====================================================================
    CAMADA DE API
    ===================================================================== */
 class ApiErr extends Error{
@@ -570,8 +654,18 @@ function pruneCache(){
 async function api(path,{ttl=0,noKey=false,force=false}={}){
   const hit=S.cache[path];
   if(ttl&&!force&&hit&&Date.now()-hit.at<ttl)return hit.d;
+  if(usaSnap()){
+    try{
+      const d=await snapResolve(path);
+      if(d!==undefined)return d;          /* atendido pelo snapshot: nenhuma requisição */
+    }catch(e){
+      if(!podeLive())throw e;             /* sem saída ao vivo, o erro do snapshot é o erro */
+    }
+  }
   /* com proxy a chave pode viver lá dentro, então aqui ela deixa de ser obrigatória */
-  if(!S.token&&!noKey&&!S.cfg.proxyBase)throw new ApiErr('Sem chave Bolsai — cole a sua em Config.',0);
+  if(!S.token&&!noKey&&!S.cfg.proxyBase)
+    throw new ApiErr(SNAP.ok?'Esse dado não está no snapshot e não há modo ao vivo configurado.'
+                            :'Sem dados: o snapshot não foi publicado e não há chave nem proxy.',0);
   /* Duas formas de mandar a chave. O header X-API-Key é o documentado, mas
      header custom obriga o navegador a um preflight OPTIONS; se a Bolsai não
      liberar isso para a origem do painel, nenhuma chamada passa. Como GET sem
@@ -692,6 +786,14 @@ const isFiiTicker=tk=>/^[A-Z]{4}1[12]$/.test(tk)&&!/^(TAEE|SANB|BPAC|ALUP|ENGI|K
 /* ---------- cota da API ---------- */
 function renderUsage(){
   const u=S.usage,el=$('#usageLabel');if(!el)return;
+  if(usaSnap()){
+    const d=SNAP.meta&&SNAP.meta.gerado_em?new Date(SNAP.meta.gerado_em):null;
+    el.textContent=d?'snapshot · '+d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})+' '+
+      d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'snapshot';
+    $('#usagePill').title='Dados publicados pelo GitHub Actions — nenhuma requisição sai do aparelho'+
+      (SNAP.meta?` · ${SNAP.meta.acoes||0} ações, ${SNAP.meta.fiis||0} FIIs, ${(SNAP.meta.detalhados||[]).length} com raio-X`:'');
+    return;
+  }
   if(u.limit!=null&&u.remaining!=null)el.textContent=`${u.remaining}/${u.limit} hoje`;
   else if(u.local)el.textContent=`${u.local} req hoje`;
   else el.textContent='—';
@@ -718,6 +820,29 @@ function renderAcct(){
     ['Plano',u.tier||'—'],['Usadas hoje',u.used!=null?String(u.used):String(u.local||0)],
     ['Limite diário',u.limit!=null?String(u.limit):'—'],['Restantes',u.remaining!=null?String(u.remaining):'—'],
   ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+}
+function renderSnap(){
+  const el=$('#snapKv'),nota=$('#snapNota');if(!el)return;
+  const m=SNAP.meta;
+  if(!SNAP.ok){
+    el.innerHTML=`<div><div class="k">Status</div><div class="v sm">${esc(SNAP.err||'não publicado')}</div></div>`;
+    nota.innerHTML=`<div class="notice warn">O snapshot ainda não foi publicado. No GitHub: <b>Settings → Secrets and variables → Actions</b> crie <span class="num">BOLSAI_API_KEY</span>, depois <b>Actions → Publicar painel e atualizar dados → Run workflow</b>. Enquanto isso o painel só funciona com proxy no modo ao vivo.</div>`;
+    return;
+  }
+  const d=new Date(m.gerado_em);
+  el.innerHTML=[
+    ['Atualizado',d.toLocaleString('pt-BR')],
+    ['Há',fmtAgo(d.getTime())],
+    ['Ações',String(m.acoes||0)],
+    ['FIIs',String(m.fiis||0)],
+    ['Com raio-X',String((m.detalhados||[]).length)],
+    ['Séries macro',String((m.series_macro||[]).length)],
+    ['Requisições na origem',String(m.requisicoes||0)+(m.cota_estourou?' (cota estourou)':'')],
+  ].map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('');
+  const errs=m.erros||[];
+  nota.innerHTML=errs.length
+    ? `<details class="fold"><summary>${errs.length} avisos da última coleta</summary><div class="inner diag">${esc(errs.join('\n'))}</div></details>`
+    : '';
 }
 function renderCache(){
   const el=$('#cacheKv');if(!el)return;
@@ -1028,8 +1153,10 @@ async function loadFiis(){
   try{
     const d=await api('/fiis/screener?'+fiiQS(),{ttl:TTL.fii});
     setBar(80);
-    const list=rowsOf(d).map(normFii).filter(x=>x.tk);
-    const segs=[...new Set(list.map(x=>x.seg).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+    const todos=rowsOf(d).map(normFii).filter(x=>x.tk);
+    /* segmentos saem da lista inteira, não da filtrada, senão o seletor encolhe a cada busca */
+    const segs=[...new Set(todos.map(x=>x.seg).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+    const list=ordenaFiis(filtraFiis(todos));
     S.fii={at:Date.now(),list,segments:segs.length?segs:S.fii.segments};save();
     populateSegments();renderFiis();
     $('#fiiResultsCard').style.display='block';
@@ -1037,6 +1164,25 @@ async function loadFiis(){
   }catch(e){$('#fiiStatus').textContent=e.message;toast(e.message);}
   setBar(100);setTimeout(()=>{$('#fiiBarWrap').style.display='none';setBar(0);},450);
   btn.disabled=false;btn.innerHTML=o;
+}
+/* No modo ao vivo a API já filtrou e isto é idempotente; no snapshot é o
+   que faz os filtros valerem, já que o arquivo vem inteiro. */
+function filtraFiis(list){
+  const c=S.cfg,ig=(a,b)=>!b||String(a||'').toLowerCase()===String(b).toLowerCase();
+  return list.filter(x=>
+    ig(x.seg,c.fiiSegment)&&ig(x.ftype,c.fiiType)&&ig(x.mandate,c.fiiMandate)&&ig(x.mgmt,c.fiiMgmt)&&
+    (!(+c.fiiPvpLt>0)||(x.pvp!=null&&x.pvp<+c.fiiPvpLt))&&
+    (!(+c.fiiDyGt>0)||(x.dy!=null&&x.dy>+c.fiiDyGt))&&
+    (c.fiiVacLt===''||!(+c.fiiVacLt>=0)||x.vac==null||x.vac<+c.fiiVacLt));
+}
+function ordenaFiis(list){
+  const k=S.cfg.fiiSort||'dividend_yield_ttm';
+  const campo={dividend_yield_ttm:'dy',pvp:'pvp',shareholders:'holders',nav:'navTot'}[k]||'dy';
+  const asc=k==='pvp';
+  return [...list].sort((a,b)=>{
+    const x=a[campo],y=b[campo];
+    if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1;
+    return asc?x-y:y-x;});
 }
 function populateSegments(){
   const sel=$('#fiiSegment');if(!sel)return;const cur=S.cfg.fiiSegment;
@@ -1075,7 +1221,7 @@ window.openAsset=tk=>{
 async function loadDetail(tk,force){
   tk=String(tk||$('#detTicker').value||'').trim().toUpperCase();
   if(!tk){toast('Informe o ticker');return;}
-  if(!S.token){toast('Cole sua chave Bolsai em Config');return;}
+  if(!temDados()){toast('Sem fonte de dados: publique o snapshot ou configure chave/proxy em Config');return;}
   const btn=$('#detBtn');btn.disabled=true;const o=btn.innerHTML;btn.innerHTML='<span class="spin"></span>';
   $('#detStatus').textContent='Consultando '+tk+'…';
   D={tk};
@@ -1085,7 +1231,12 @@ async function loadDetail(tk,force){
     try{D.hist=rowsOf(await api(`/stocks/${tk}/history?limit=180`,{ttl:TTL.quote,force}),['prices'])
       .map(x=>({d:pstr(x,F.date),c:pnum(x,['adjusted_close','close','price'])})).filter(x=>x.c!=null)
       .sort((a,b)=>new Date(a.d)-new Date(b.d));}catch(e){D.histErr=e.message;}
-    $('#detStatus').textContent=`${tk} · ${D.a.kind==='fii'?'FII':'ação'} · dados de ${fmtAgo(D.a.loadedAt)}`;
+    /* loadAsset guarda os erros em notes e devolve o objeto mesmo vazio; sem
+       isto um ticker ausente do snapshot aparecia como consulta bem-sucedida */
+    const veioAlgo=D.a.price>0||D.a.pl!=null||D.a.pvp!=null||D.a.dy!=null||D.a.nav!=null;
+    $('#detStatus').textContent=veioAlgo
+      ? `${tk} · ${D.a.kind==='fii'?'FII':'ação'} · dados de ${fmtAgo(D.a.loadedAt)}`
+      : ((D.a.notes&&D.a.notes[0])||`Nada encontrado para ${tk}.`);
   }catch(e){$('#detStatus').textContent=e.message;toast(e.message);}
   btn.disabled=false;btn.innerHTML=o;
   renderDetail();
@@ -1529,8 +1680,9 @@ window.delPos=i=>{if(confirm('Remover posição '+S.portfolio[i].tk+'?')){S.port
 /* =====================================================================
    CONFIG / CHAVE / BACKUP
    ===================================================================== */
-function syncTokenUI(){const on=!!S.token||!!S.cfg.proxyBase;$('#tokenDot').classList.toggle('on',on);
-  $('#tokenLabel').textContent=on?'Conectado':'Sem chave';}
+function syncTokenUI(){const on=usaSnap()||!!S.token||!!S.cfg.proxyBase;
+  $('#tokenDot').classList.toggle('on',on);
+  $('#tokenLabel').textContent=usaSnap()?'Snapshot':(on?'Conectado':'Sem chave');}
 const CFG_INPUTS=['cfgBazin','cfgCdiPremium','cfgMinDy','cfgMaxPl','cfgMinRoe','cfgMaxDebt','cfgMinMargin','cfgFiiMaxPvp','cfgLot','cfgBelow'];
 function fillCfg(){
   $('#cfgToken').value=S.token||'';
@@ -1538,7 +1690,8 @@ function fillCfg(){
   $('#cfgMinDy').value=S.cfg.minDy;$('#cfgMaxPl').value=S.cfg.maxPl;
   $('#cfgMinRoe').value=S.cfg.minRoe;$('#cfgMaxDebt').value=S.cfg.maxDebt;
   $('#cfgMinMargin').value=S.cfg.minMargin;$('#cfgFiiMaxPvp').value=S.cfg.fiiMaxPvp;
-  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;$('#cfgKeyMode').value=S.cfg.keyMode;$('#cfgProxy').value=S.cfg.proxyBase||'';
+  $('#cfgLot').value=S.cfg.lot;$('#cfgBelow').value=S.cfg.below;$('#cfgKeyMode').value=S.cfg.keyMode;
+  $('#cfgFonte').value=S.cfg.fonte||'auto';$('#cfgProxy').value=S.cfg.proxyBase||'';
   $('#fUniverse').value=S.cfg.universe;$('#fSort').value=S.cfg.sort;
   $('#fProfit').value=S.cfg.profit;$('#fServerFilter').value=S.cfg.serverFilter;
   $('#fiiType').value=S.cfg.fiiType;$('#fiiMandate').value=S.cfg.fiiMandate;$('#fiiMgmt').value=S.cfg.fiiMgmt;
@@ -1632,7 +1785,7 @@ async function runDiag(){
   out.textContent=lines.join('\n\n')+'\n\nSe alguma coluna do painel aparece vazia, compare o nome do campo acima com a lista F do código.';
 }
 async function refreshAll(opts){
-  if(!S.token){renderRadar();renderPortfolio();return;}
+  if(!temDados()){renderRadar();renderPortfolio();return;}
   const tks=[...new Set([...S.watch.map(w=>w.tk),...S.portfolio.map(p=>p.tk)])];
   for(const tk of tks){
     const a=A(tk);
@@ -1652,7 +1805,7 @@ async function refreshAll(opts){
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');
   $$('.view').forEach(v=>v.classList.remove('active'));$('#'+t.dataset.tab).classList.add('active');
-  if(t.dataset.tab==='config'){renderCache();renderAcct();}
+  if(t.dataset.tab==='config'){renderCache();renderAcct();renderSnap();}
 });
 const slider=$('#split');
 function syncSplit(){const v=+slider.value;S.cfg.split=v;$('#splitA').textContent=v;$('#splitB').textContent=100-v;
@@ -1690,7 +1843,9 @@ $('#fiiCsv').onclick=()=>{
  ['fiiPvpLt','fiiPvpLt'],['fiiDyGt','fiiDyGt'],['fiiVacLt','fiiVacLt'],['fiiSort','fiiSort']]
  .forEach(([id,key])=>$('#'+id).addEventListener('change',e=>{
    S.cfg[key]=e.target.value;save();
-   $('#fiiStatus').textContent='Filtros alterados — toque em "Escanear FIIs" para aplicar no servidor.';}));
+   /* no snapshot refiltrar é local e instantâneo; ao vivo exige nova requisição */
+   if(usaSnap()&&S.fii.at)loadFiis();
+   else $('#fiiStatus').textContent='Filtros alterados — toque em "Escanear FIIs" para aplicar no servidor.';}));
 
 $('#detBtn').onclick=()=>loadDetail();
 $('#detTicker').addEventListener('keydown',e=>{if(e.key==='Enter')loadDetail();});
@@ -1704,7 +1859,7 @@ $('#saveAsset').onclick=async()=>{
   if(editIdx>=0)S.watch[editIdx]=obj;
   else{if(S.watch.find(x=>x.tk===tk)){toast('Ticker já existe');return;}S.watch.push(obj);}
   save();resetForm();
-  if(S.token&&!assetFromScan(tk)){try{await loadAsset(tk);}catch(e){}}
+  if(temDados()&&!assetFromScan(tk)){try{await loadAsset(tk);}catch(e){}}
   renderRadar();toast('Salvo');
 };
 $('#cancelEdit').onclick=resetForm;
@@ -1712,7 +1867,7 @@ $('#savePos').onclick=async()=>{
   const tk=$('#pTicker').value.trim().toUpperCase(),qty=parseInt($('#pQty').value)||0,avg=parseFloat($('#pAvg').value)||0;
   if(!tk||qty<=0){toast('Ticker e quantidade obrigatórios');return;}
   S.portfolio.push({tk,qty,avg});save();['pTicker','pQty','pAvg'].forEach(id=>$('#'+id).value='');
-  if(S.token&&!assetFromScan(tk)){try{await loadAsset(tk);}catch(e){}}
+  if(temDados()&&!assetFromScan(tk)){try{await loadAsset(tk);}catch(e){}}
   renderPortfolio();toast('Posição adicionada');
 };
 CFG_INPUTS.forEach(id=>$('#'+id).addEventListener('change',saveCfg));
@@ -1739,6 +1894,16 @@ $('#testToken').onclick=async()=>{
   }catch(e){toast(e.message);}
   S.token=prev;
 };
+$('#cfgFonte').addEventListener('change',async e=>{
+  S.cfg.fonte=e.target.value;S.cache={};save();
+  syncTokenUI();renderUsage();renderSnap();
+  toast(usaSnap()?'Usando o snapshot publicado':'Modo ao vivo: exige proxy, pois a Bolsai barra o navegador');
+  await carregaTudo(true);});
+$('#snapReload').onclick=async e=>{
+  const b=e.currentTarget,o=b.innerHTML;b.innerHTML='<span class="spin dark"></span>';
+  snapMem.clear();await snapInit();syncTokenUI();renderUsage();renderSnap();
+  await carregaTudo(true);
+  b.innerHTML=o;toast(SNAP.ok?'Snapshot recarregado':SNAP.err);};
 $('#cfgProxy').addEventListener('change',e=>{
   S.cfg.proxyBase=e.target.value.trim().replace(/\/+$/,'');S.cache={};save();syncTokenUI();
   toast(S.cfg.proxyBase?'Chamadas passam a ir por '+S.cfg.proxyBase:'Chamadas voltam a ir direto à Bolsai');});
@@ -1796,23 +1961,41 @@ if('serviceWorker' in navigator){
   });
 }
 
-(function init(){
-  syncTokenUI();fillCfg();
+/* Com o snapshot, escanear é ler arquivo local: dá para deixar tudo pronto
+   na abertura em vez de esperar o usuário apertar botão. Ao vivo cada
+   varredura custa requisição, então lá continua sob demanda. */
+async function carregaTudo(forcar){
+  if(!usaSnap()){
+    if(!podeLive())return;
+    if(!S.usage.at||Date.now()-S.usage.at>36e5)readUsage(true);
+    if(!S.macro.at)await loadMacro();
+    await refreshAll();
+    return;
+  }
+  const novo=SNAP.meta&&SNAP.meta.gerado_em?Date.parse(SNAP.meta.gerado_em):0;
+  const velho=ts=>forcar||!ts||ts<novo;
+  if(velho(S.scan.at))await runScan();
+  if(velho(S.fii.at))await loadFiis();
+  if(velho(S.macro.at))await loadMacro();
+  await refreshAll({force:!!forcar});
+}
+(async function init(){
+  fillCfg();
   slider.value=S.cfg.split;syncSplit();
   $$('#modes .seg').forEach(s=>s.classList.toggle('on',s.dataset.mode===S.cfg.mode));
   $$('#srcSeg .s').forEach(s=>s.classList.toggle('on',s.dataset.src===S.cfg.src));
   populateSectors();populateSegments();
-  renderUsage();renderAcct();renderCache();paintRateHeaders();
+  renderAcct();renderCache();paintRateHeaders();
   renderRadar();renderPortfolio();renderScan();renderMacro();
   if(S.fii.at){$('#fiiResultsCard').style.display='block';renderFiis();}
-  if(!S.token){
-    $('#scanStatus').textContent='Cole sua chave Bolsai em Config para escanear.';
-    $('#fiiStatus').textContent='Cole sua chave Bolsai em Config para escanear.';
-  }else{
-    if(!S.usage.at||Date.now()-S.usage.at>36e5)readUsage(true);
-    if(!S.macro.at)loadMacro();
-    refreshAll();
+  await snapInit();
+  syncTokenUI();renderUsage();renderSnap();
+  if(!temDados()){
+    const m=SNAP.err?('Snapshot indisponível: '+SNAP.err):'Sem fonte de dados — veja Config.';
+    $('#scanStatus').textContent=m;$('#fiiStatus').textContent=m;
+    return;
   }
+  await carregaTudo(false);
 })();
 </script>
 </body>

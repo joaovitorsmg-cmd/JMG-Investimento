@@ -15,68 +15,84 @@ App pessoal (PWA) de renda passiva e valor na B3: scanner de ações e de FIIs, 
 
 ## Arquivos
 ```
-index.html      → o painel
-manifest.json   → identidade do app (nome, ícones, cores)
-sw.js           → service worker (offline + instalável)
-icon-192.png    → ícone do app
-icon-512.png    → ícone do app
+index.html                      → o painel
+tools/snapshot.mjs              → busca os dados na Bolsai (roda no Actions)
+.github/workflows/pages.yml     → agenda a coleta e publica o site
+worker.js                       → proxy Cloudflare, só para o modo ao vivo
+manifest.json                   → identidade do app (nome, ícones, cores)
+sw.js                           → service worker (offline + instalável)
+icon-192.png / icon-512.png     → ícones do app
 ```
-
-## Publicar no GitHub Pages
-
-**Opção rápida (pelo site, sem Git):**
-1. Crie um repositório novo — ex.: `jmg-investimentos`.
-2. **Add file → Upload files** → arraste os 5 arquivos acima → **Commit**.
-3. **Settings → Pages** → Source: `Deploy from a branch` → Branch: `main` / `/root` → **Save**.
-4. Em ~1 min o app fica em:
-   `https://joaovitorsmg-cmd.github.io/jmg-investimentos/`
-
-**Opção Git (terminal):**
-```bash
-git init && git add . && git commit -m "JMG Investimentos"
-git branch -M main
-git remote add origin https://github.com/joaovitorsmg-cmd/jmg-investimentos.git
-git push -u origin main
-```
-Depois ative o Pages como no passo 3.
 
 ## Instalar no celular (vira app com ícone)
 - **Android (Chrome):** abra o link → menu ⋮ → **Instalar app** / **Adicionar à tela inicial**.
 - **iPhone (Safari):** abra o link → **Compartilhar** → **Adicionar à Tela de Início**.
 
-Depois de instalado, abre em tela cheia e funciona offline (as cotações precisam de internet).
+Depois de instalado, abre em tela cheia e funciona offline — como os dados são arquivos
+estáticos publicados junto do app, até o scanner continua respondendo sem internet, com
+os números da última publicação.
 
-## Conectar os dados (1ª vez)
-1. Crie a conta com Google em **usebolsai.com** e gere sua chave de API.
-2. Abra o app → toque em **"Sem chave"** no topo → cole a chave → **Salvar e conectar**.
-3. Vá em **Ações → Escanear B3**.
+## Como os dados chegam até o painel
 
-> A chave e seus dados ficam salvos só no aparelho (localStorage) e a chave vai no header `X-API-Key`. No GitHub Pages persistem entre visitas; se abrir o arquivo baixado direto, pode pedir a chave de novo.
+A `api.usebolsai.com` **não aceita chamadas de navegador**: ela responde, mas não envia
+`Access-Control-Allow-Origin`, então o navegador barra a leitura de qualquer resposta.
+Isso não tem correção no front-end — a chamada precisa sair de um servidor.
 
-### Cota da API
-O plano grátis da Bolsai dá **200 requisições/dia**, então o painel cacheia cada resposta: cotação 15 min, fundamentos 12 h, proventos e FIIs 24 h, macro 6 h, setores 7 dias. O contador no topo mostra quanto resta, e **Config → Cache e consumo** permite limpar o cache ou reler a cota. Mudar critérios (DY mínimo, ROE, P/L, dívida) **re-ranqueia o universo já baixado sem gastar requisição**.
+O servidor aqui é o próprio **GitHub Actions**:
 
-Endpoints de **proventos, balanços e macro são do plano Pro**. No grátis o painel segue funcionando: preço, fundamentos, screener de ações e de FIIs respondem, e o DPA pode ser lançado à mão em *Minha lista*.
+```
+GitHub Actions (servidor, sem CORS)          GitHub Pages                 celular
+  tools/snapshot.mjs                           _site/index.html             lê ./data/*.json
+  → api.usebolsai.com  ──busca──▶  _site/data/*.json  ──publica──▶  mesma origem, sem CORS
+  chave = Secret BOLSAI_API_KEY
+```
 
-### Se tudo falhar de uma vez
-Rode **Config → Diagnóstico da API**. A sonda de conectividade testa o host em modo `no-cors` (que não exige CORS e só falha se o servidor não responder) e depois tenta ler de três formas — sem header custom, com `X-API-Key` e com `?api_key=`:
+Consequências, todas boas:
 
-- **host inalcançável** → rede/DNS do aparelho ou Bolsai fora do ar. Nada a corrigir aqui;
-- **host responde, mas nenhuma leitura passa** → a API não manda `Access-Control-Allow-Origin`, isto é, não aceita chamadas de navegador. Não há correção possível no front-end: use o **proxy** (abaixo) ou peça à Bolsai que libere a origem do painel;
-- **só a do header falha** → CORS no preflight do `X-API-Key`. Se `?api_key=` passar, troque **Config → Como enviar a chave** para *Parâmetro `?api_key=`*;
-- **todas leem** → é status HTTP, e a lista de endpoints logo abaixo mostra qual.
+- **a chave nunca chega ao aparelho** — vive só no Secret do repositório;
+- **nenhuma cota é gasta pelo celular**: quem consome as requisições é a Action, uma vez por dia;
+- o painel abre **já pronto** — scanner, FIIs e macro carregados, sem apertar botão;
+- funciona offline, porque é tudo arquivo estático.
 
-> Atenção a um engano fácil: um GET "simples" sem header custom **também** precisa de `Access-Control-Allow-Origin` na resposta. O preflight é uma exigência *adicional* dos headers custom, não a única.
+O preço é a atualização ser periódica em vez de instantânea — o que não custa nada aqui,
+já que a Bolsai entrega **fechamento** da B3, não preço intradiário.
 
-### Proxy (quando a API não aceita navegador)
-`worker.js` é um Cloudflare Worker pronto: repassa as chamadas para `api.usebolsai.com` e devolve com o cabeçalho de CORS que falta. Plano grátis basta, deploy em ~5 min — as instruções estão no topo do arquivo. Depois é só preencher **Config → Proxy** com a URL do worker.
+## Configurar (uma vez)
 
-Guardando a chave como *Secret* `BOLSAI_KEY` no worker, ela passa a viver só lá: some do localStorage do celular e não trafega mais do navegador. Nesse caso o campo de chave do painel pode ficar vazio.
+1. **Chave como Secret** — no GitHub: `Settings → Secrets and variables → Actions → New repository secret`,
+   nome `BOLSAI_API_KEY`, valor = sua chave da Bolsai.
+2. **Pages pelo Actions** — `Settings → Pages → Source: GitHub Actions`.
+   (O workflow tenta configurar sozinho; se a conta não permitir, esse clique resolve.)
+3. **Rodar** — aba `Actions → Publicar painel e atualizar dados → Run workflow`.
 
-> Até a v7 o service worker devolvia um 503 sintético quando a chamada falhava, então falta de rede, DNS e bloqueio de CORS apareciam todos como "Bolsai fora do ar (503)". Agora a chamada sai direto pelo navegador e o erro real aparece como erro real.
+Daí em diante roda sozinho às 23:00 UTC (20:00 de Brasília) nos dias úteis, e a cada push.
 
-### Se alguma coluna aparecer vazia
-O OpenAPI da Bolsai deixa vários schemas abertos, então o painel procura cada métrica por vários nomes de campo possíveis. Em **Config → Diagnóstico da API** ele bate em cada endpoint e imprime os campos que voltaram — compare com a lista `F` no topo do `<script>` e acrescente o nome que faltar.
+### Ajustar o volume de dados
+No `Run workflow` dá para mudar, ou editar os defaults em `.github/workflows/pages.yml`:
+
+| Entrada | Padrão | O que faz |
+|---|---|---|
+| `detalhe_acoes` | 60 | quantas ações ganham raio-X (preço 52s, proventos, balanços, cadastro) |
+| `detalhe_fiis` | 40 | quantos FIIs ganham raio-X (distribuições, histórico, inquilinos) |
+| `max_req` | 800 | teto de requisições da execução |
+| `tickers_extra` | — | tickers sempre detalhados, separados por vírgula |
+
+Custo aproximado: 9 requisições para o núcleo (screener de ações, de FIIs, setores e macro)
+mais ~6 por ação detalhada e ~5 por FII. **No plano grátis (200/dia)** use
+`detalhe_acoes=15`, `detalhe_fiis=10`, `max_req=180` — o núcleo sozinho já alimenta
+Alocador, os dois scanners, Macro, Minha lista e Carteira. **No Pro (10 mil/dia)** os padrões
+sobram, e dá para subir bastante.
+
+Se a Bolsai falhar numa execução, o job recupera o snapshot anterior do cache e publica
+ele: o painel fica com dado de ontem em vez de ficar vazio. O resumo da execução no
+GitHub mostra o que veio e o que faltou.
+
+## Modo ao vivo (opcional)
+
+Em `Config → Fonte de dados` dá para escolher "Sempre ao vivo". Como o navegador barra a
+Bolsai direto, esse modo exige um proxy: `worker.js` é um Cloudflare Worker pronto
+(instruções no topo do arquivo) — publique, e preencha `Config → Proxy` com a URL dele.
+Serve para consultar um ticker que ficou fora do raio-X do snapshot.
 
 ## Atualizar o app depois de mudar algo
 Edite o arquivo no GitHub e pronto: o service worker busca o shell **pela rede primeiro** e só cai no cache quando está offline, então o que está publicado é o que aparece no próximo carregamento. Se o app já estava aberto quando você publicou, ele avisa "Nova versão instalada" e recarrega sozinho.
