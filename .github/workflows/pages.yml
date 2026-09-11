@@ -1,0 +1,127 @@
+# =====================================================================
+# Publica o painel no GitHub Pages com os dados da Bolsai embutidos.
+#
+# Por que o dado é buscado aqui e não no celular: a api.usebolsai.com
+# responde, mas não devolve Access-Control-Allow-Origin, então o
+# navegador barra a leitura de qualquer resposta. Aqui é servidor
+# falando com servidor — CORS não existe — e o resultado vai para o
+# site como JSON na mesma origem do painel, onde ler é trivial.
+#
+# A chave fica no Secret BOLSAI_API_KEY e nunca chega ao aparelho.
+# =====================================================================
+name: Publicar painel e atualizar dados
+
+on:
+  schedule:
+    # 23:00 UTC = 20:00 em Brasília, depois do fechamento da B3, dias úteis
+    - cron: '0 23 * * 1-5'
+  push:
+    branches: [main]
+    paths-ignore: ['README.md', 'worker.js']
+  workflow_dispatch:
+    inputs:
+      detalhe_acoes:
+        description: 'Quantas ações ganham raio-X completo'
+        default: '60'
+      detalhe_fiis:
+        description: 'Quantos FIIs ganham raio-X completo'
+        default: '40'
+      max_req:
+        description: 'Teto de requisições (grátis=200/dia, Pro=10000/dia)'
+        default: '800'
+      tickers_extra:
+        description: 'Tickers sempre detalhados, separados por vírgula'
+        default: ''
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Uma publicação por vez; não cancela a que está no ar
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Guarda o último snapshot bom: se a Bolsai falhar hoje, o painel
+      # continua no ar com o dado de ontem em vez de ficar vazio.
+      - name: Recuperar último snapshot
+        uses: actions/cache/restore@v4
+        with:
+          path: _site/data
+          key: bolsai-data-${{ github.run_id }}
+          restore-keys: bolsai-data-
+
+      - name: Buscar dados na Bolsai
+        id: snapshot
+        continue-on-error: true
+        env:
+          BOLSAI_API_KEY: ${{ secrets.BOLSAI_API_KEY }}
+          OUT_DIR: _site/data
+          DETALHE_ACOES: ${{ github.event.inputs.detalhe_acoes || '60' }}
+          DETALHE_FIIS: ${{ github.event.inputs.detalhe_fiis || '40' }}
+          MAX_REQ: ${{ github.event.inputs.max_req || '800' }}
+          TICKERS_EXTRA: ${{ github.event.inputs.tickers_extra || '' }}
+        run: node tools/snapshot.mjs
+
+      - name: Montar o site
+        run: |
+          mkdir -p _site/data
+          cp index.html manifest.json sw.js icon-192.png icon-512.png _site/
+          touch _site/.nojekyll
+          # Se nem o cache nem a busca produziram meta.json, publica um aviso
+          # legível em vez de um 404 silencioso no painel.
+          if [ ! -f _site/data/meta.json ]; then
+            printf '{"gerado_em":null,"erros":["snapshot nao gerado: confira o Secret BOLSAI_API_KEY e o log da Action"],"acoes":0,"fiis":0,"detalhados":[],"series_macro":[]}' > _site/data/meta.json
+          fi
+          echo "--- publicando ---"; ls -la _site; du -sh _site/data
+          echo "ativos detalhados: $(ls _site/data/ativos 2>/dev/null | wc -l)"
+
+      - name: Guardar snapshot para a próxima execução
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: _site/data
+          key: bolsai-data-${{ github.run_id }}
+
+      # enablement liga o Pages e aponta a origem para o Actions quando dá.
+      # Se a conta não permitir, é um clique manual em Settings → Pages.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Resumo
+        if: always()
+        run: |
+          echo "### Snapshot Bolsai" >> $GITHUB_STEP_SUMMARY
+          if [ -f _site/data/meta.json ]; then
+            node -e '
+              const m=require("./_site/data/meta.json");
+              const L=[];
+              L.push("- gerado em: **"+(m.gerado_em||"não gerado")+"**");
+              L.push("- ações: **"+(m.acoes||0)+"** · FIIs: **"+(m.fiis||0)+"** · raio-X: **"+((m.detalhados||[]).length)+"**");
+              L.push("- requisições usadas: **"+(m.requisicoes||0)+"**"+(m.cota_estourou?" (cota estourou)":""));
+              if((m.erros||[]).length) L.push("\n<details><summary>"+m.erros.length+" erros</summary>\n\n```\n"+m.erros.join("\n")+"\n```\n</details>");
+              console.log(L.join("\n"));
+            ' >> $GITHUB_STEP_SUMMARY
+          fi
