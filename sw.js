@@ -4,7 +4,7 @@
    Para atualizar o app depois de mudar arquivos: suba o número
    da versão em CACHE (ex.: jmg-inv-v2) e recarregue.
    ===================================================== */
-const CACHE = 'jmg-inv-v7';
+const CACHE = 'jmg-inv-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -28,19 +28,14 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // Dados de mercado (Bolsai) — sempre pela rede. O cache de respostas é feito
-  // no app (com TTL por tipo de dado), então o SW não deve guardar nada aqui:
-  // preço velho e cota gasta em dobro seriam o resultado.
-  if (url.includes('api.usebolsai.com')) {
-    e.respondWith(
-      fetch(e.request).catch(() =>
-        new Response(JSON.stringify({ detail: 'offline' }), {
-          status: 503, headers: { 'Content-Type': 'application/json' }
-        })
-      )
-    );
-    return;
-  }
+  // Dados de mercado (Bolsai) — o service worker NÃO se mete. Sai direto pelo
+  // navegador, sem cache aqui (o app já cacheia por TTL).
+  //
+  // Até a v7 este bloco devolvia um 503 sintético quando o fetch falhava, e isso
+  // mentia sobre a causa: falha de rede, DNS e bloqueio de CORS chegavam ao app
+  // todos como "Bolsai fora do ar (503)". Deixando passar, o erro real aparece
+  // como erro real — e o Diagnóstico em Config consegue separar um do outro.
+  if (url.includes('api.usebolsai.com')) return;
 
   // Fontes do Google — stale-while-revalidate (deixa o app abrir offline)
   if (url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com')) {
