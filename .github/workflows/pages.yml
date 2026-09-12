@@ -22,13 +22,13 @@ on:
     inputs:
       detalhe_acoes:
         description: 'Quantas ações ganham raio-X completo'
-        default: '60'
+        default: '500'
       detalhe_fiis:
         description: 'Quantos FIIs ganham raio-X completo'
-        default: '40'
+        default: '300'
       max_req:
         description: 'Teto de requisições (grátis=200/dia, Pro=10000/dia)'
-        default: '800'
+        default: '8000'
       tickers_extra:
         description: 'Tickers sempre detalhados, separados por vírgula'
         default: ''
@@ -86,9 +86,9 @@ jobs:
         env:
           BOLSAI_API_KEY: ${{ secrets.BOLSAI_API_KEY }}
           OUT_DIR: _site/data
-          DETALHE_ACOES: ${{ github.event.inputs.detalhe_acoes || '60' }}
-          DETALHE_FIIS: ${{ github.event.inputs.detalhe_fiis || '40' }}
-          MAX_REQ: ${{ github.event.inputs.max_req || '800' }}
+          DETALHE_ACOES: ${{ github.event.inputs.detalhe_acoes || '500' }}
+          DETALHE_FIIS: ${{ github.event.inputs.detalhe_fiis || '300' }}
+          MAX_REQ: ${{ github.event.inputs.max_req || '8000' }}
           TICKERS_EXTRA: ${{ github.event.inputs.tickers_extra || '' }}
         run: node tools/snapshot.mjs
 
