@@ -1507,23 +1507,32 @@ function candidates(bkt){
   const addManual=()=>S.watch.filter(w=>w.bkt===bkt).forEach(w=>{
     const a=A(w.tk);if(!(a.price>0))return;
     out[w.tk]={tk:w.tk,nm:w.nm||a.nm||'',bkt,price:a.price,target:effTarget(w),
-      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,kind:a.kind||'stock',src:'manual'};});
+      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,roe:a.roe,marg:a.marg,debt:a.debt,vol:a.vol,
+      kind:a.kind||'stock',src:'manual'};});
   const addScan=()=>{
     (bkt==='rp'?(S.scan.renda||[]):(S.scan.valor||[])).forEach(m=>{
       if(out[m.tk])return;
       out[m.tk]={tk:m.tk,nm:m.nm||m.sector||'',bkt,price:m.price,
         target:bkt==='vl'?(m.graham||0):(bazinTarget(m.dpa)||0),
-        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,score:m.vscore||0,kind:'stock',src:'scanner'};});
+        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,roe:m.roe,marg:m.marg,debt:m.debt,vol:m.vol,
+        score:m.vscore||0,kind:'stock',src:'scanner'};});
     /* FIIs entram no bucket de renda — é o que eles são */
     if(bkt==='rp'){
       (S.fii.list||[]).filter(x=>x.price>0&&x.dy!=null&&(x.pvp==null||x.pvp<=+S.cfg.fiiMaxPvp))
         .sort((a,b)=>b.dy-a.dy).slice(0,10).forEach(m=>{if(out[m.tk])return;
           out[m.tk]={tk:m.tk,nm:m.seg||m.ftype||'',bkt:'rp',price:m.price,target:bazinTarget(m.dpa)||0,
-            dpa:m.dpa||0,dy:m.dy,pl:null,pvp:m.pvp,kind:'fii',src:'scanner'};});
+            dpa:m.dpa||0,dy:m.dy,pl:null,pvp:m.pvp,vol:m.vol,kind:'fii',src:'scanner'};});
     }
   };
   if(src==='manual')addManual();else if(src==='scanner')addScan();else{addManual();addScan();}
-  return Object.values(out).filter(c=>c.price>0).filter(passaQualidade);
+  /* os "Parâmetros de decisão" de Config valem para qualquer origem — a watchlist manual
+     não é isenção de qualidade, senão MGLU3 (P/L acima do teto) entra pela lista e ignora o filtro */
+  const passa=c=>passaQualidade(c)
+    &&(c.roe==null||c.roe>=+S.cfg.minRoe)
+    &&(c.debt==null||c.debt<=+S.cfg.maxDebt)
+    &&(c.marg==null||+S.cfg.minMargin<=0||c.marg>=+S.cfg.minMargin)
+    &&(bkt!=='vl'||c.pl==null||c.pl<=+S.cfg.maxPl);
+  return Object.values(out).filter(c=>c.price>0).filter(passa);
 }
 function rankBucket(items,bkt){
   if(!items.length)return [];
