@@ -769,14 +769,15 @@ function normStock(o){
   return {tk:(pstr(o,F.tk)||'').toUpperCase(),nm:pstr(o,F.name)||'',sector:pstr(o,F.sector)||'',
     price,pl,pvp,eps,bvps,dy,dpa:(dy!=null&&price>0)?dy/100*price:0,
     roe:ppct(o,F.roe),marg:ppct(o,F.marg),evEb:pnum(o,F.evEb),debt:pnum(o,F.debt),
-    mcap:pnum(o,F.mcap),graham:grahamOf(price,pl,pvp,eps,bvps),kind:'stock'};
+    mcap:pnum(o,F.mcap),vol:pnum(o,F.avgVol)??pnum(o,F.vol),
+    graham:grahamOf(price,pl,pvp,eps,bvps),kind:'stock'};
 }
 function normFii(o){
   const price=pnum(o,F.price),pvp=pnum(o,F.pvp),nav=pnum(o,F.nav);
   const dy=ppct(o,F.dy);
   return {tk:(pstr(o,F.tk)||'').toUpperCase(),nm:pstr(o,F.name)||'',
     price:price??((pvp>0&&nav>0)?pvp*nav:null),pvp,nav,navTot:pnum(o,F.navTot),
-    dy,dpa:(dy!=null&&price>0)?dy/100*price:0,
+    dy,dpa:(dy!=null&&price>0)?dy/100*price:0,vol:pnum(o,F.avgVol)??pnum(o,F.vol),
     vac:ppct(o,F.vac),seg:pstr(o,F.seg)||'',ftype:pstr(o,F.ftype)||'',
     mandate:pstr(o,F.mandate)||'',mgmt:pstr(o,F.mgmt)||'',admin:pstr(o,F.admin)||'',
     holders:pnum(o,F.holders),kind:'fii'};
@@ -874,6 +875,13 @@ function paintRateHeaders(){
     th.title=r?`${r.name} em ${n2(r.val)}% — coluna mostra DY menos esse juro`:'Atualize a aba Macro para comparar com a renda fixa';});
 }
 const vsCell=dy=>{const d=vsRate(dy);return d==null?'—':`<span class="${d>=0?'up-pos':'up-neg'}">${pct(d)}</span>`;};
+
+/* ---------- filtros de qualidade invisíveis (não aparecem na UI) ---------- */
+/* liquidez mínima: abaixo disso o preço de tela é fantasma (ex.: HDEL11, RDLI11) */
+const MIN_LIQ_DIARIA=1e6;
+/* DY acima disso é quase sempre amortização de capital ou erro de API, não dividendo recorrente */
+const MAX_DY_ANUAL=20;
+const passaQualidade=m=>(m.vol==null||m.vol>=MIN_LIQ_DIARIA)&&(m.dy==null||m.dy<=MAX_DY_ANUAL);
 
 /* ---------- alvos e status ---------- */
 const bazinTarget=dpa=>(dpa>0&&S.cfg.bazin>0)?dpa/(S.cfg.bazin/100):null;
@@ -1026,7 +1034,7 @@ async function screenerRows(kind){
 function rankScan(all){
   const c=S.cfg,minRoe=+c.minRoe,maxDebt=+c.maxDebt,minM=+c.minMargin,maxPl=+c.maxPl;
   /* dado ausente não desqualifica — só reprova quando o número existe e fura o critério */
-  const q=all.filter(m=>m.price>0)
+  const q=all.filter(m=>m.price>0).filter(passaQualidade)
     .filter(m=>(m.roe==null||m.roe>=minRoe)&&(m.debt==null||m.debt<=maxDebt)&&(m.marg==null||minM<=0||m.marg>=minM));
   const renda=q.filter(m=>m.dy!=null&&m.dy>=+c.minDy)
     .sort((a,b)=>(b.dy-a.dy)||((a.pvp??9)-(b.pvp??9))).slice(0,15);
@@ -1169,7 +1177,7 @@ async function loadFiis(){
    que faz os filtros valerem, já que o arquivo vem inteiro. */
 function filtraFiis(list){
   const c=S.cfg,ig=(a,b)=>!b||String(a||'').toLowerCase()===String(b).toLowerCase();
-  return list.filter(x=>
+  return list.filter(passaQualidade).filter(x=>
     ig(x.seg,c.fiiSegment)&&ig(x.ftype,c.fiiType)&&ig(x.mandate,c.fiiMandate)&&ig(x.mgmt,c.fiiMgmt)&&
     (!(+c.fiiPvpLt>0)||(x.pvp!=null&&x.pvp<+c.fiiPvpLt))&&
     (!(+c.fiiDyGt>0)||(x.dy!=null&&x.dy>+c.fiiDyGt))&&
@@ -1510,7 +1518,7 @@ function candidates(bkt){
     }
   };
   if(src==='manual')addManual();else if(src==='scanner')addScan();else{addManual();addScan();}
-  return Object.values(out).filter(c=>c.price>0);
+  return Object.values(out).filter(c=>c.price>0).filter(passaQualidade);
 }
 function rankBucket(items,bkt){
   if(!items.length)return [];
@@ -1545,19 +1553,47 @@ function allocateBucket(budget,bkt,mode,slots){
     if(done)break;pass++;}
   return {lines,spent};
 }
+/* trava de pulverização: aporte baixo não dá pra diversificar sem virar pó de posição */
+function rankAllCandidates(){
+  return [...rankBucket(candidates('rp'),'rp'),...rankBucket(candidates('vl'),'vl')]
+    .sort((a,b)=>b.score-a.score);
+}
+function allocateLowBudget(budget,maxAssets){
+  let ranked=rankAllCandidates();
+  if(+S.cfg.below===1)ranked=ranked.filter(x=>!x.target||x.margin>=0);
+  if(!ranked.length||budget<=0)return {lines:[],spent:0};
+  const pick=ranked.slice(0,maxAssets);
+  const lines=[];let spent=0;
+  for(const x of pick){const q=roundQty((budget-spent)/x.price);if(q>0){lines.push(mkLine(x,q));spent+=q*x.price;}}
+  let pass=0;
+  while(pass<6){let done=true;
+    for(const x of pick){const l=+S.cfg.lot,cost=x.price*l;
+      if(budget-spent>=cost){const ln=lines.find(z=>z.tk===x.tk);
+        if(ln){ln.qty+=l;ln.total+=cost;}else lines.push(mkLine(x,l));spent+=cost;done=false;}}
+    if(done)break;pass++;}
+  return {lines,spent};
+}
 let lastTicket=null;
 function runAllocator(){
   const budget=parseFloat($('#budget').value)||0;
   if(budget<=0){toast('Informe o valor disponível');return;}
+  const maxAssets=budget<150?1:(budget<=500?2:Infinity);
   const split=S.cfg.split/100,mode=S.cfg.mode;
-  const aRP=allocateBucket(budget*split,'rp',mode,4);
-  const aVL=allocateBucket(budget*(1-split),'vl',mode,3);
-  const map={};[...aRP.lines,...aVL.lines].forEach(l=>{
-    if(map[l.tk]){map[l.tk].qty+=l.qty;map[l.tk].total+=l.total;}else map[l.tk]={...l};});
-  const lines=Object.values(map).sort((a,b)=>b.total-a.total);
-  const spent=lines.reduce((s,l)=>s+l.total,0);
+  let lines,spent;
+  if(maxAssets<Infinity){
+    const r=allocateLowBudget(budget,maxAssets);
+    lines=r.lines;spent=r.spent;
+    toast(`Aporte de ${brl(budget)}: trava de pulverização limita a ${maxAssets} ativo(s).`);
+  }else{
+    const aRP=allocateBucket(budget*split,'rp',mode,4);
+    const aVL=allocateBucket(budget*(1-split),'vl',mode,3);
+    const map={};[...aRP.lines,...aVL.lines].forEach(l=>{
+      if(map[l.tk]){map[l.tk].qty+=l.qty;map[l.tk].total+=l.total;}else map[l.tk]={...l};});
+    lines=Object.values(map).sort((a,b)=>b.total-a.total);
+    spent=lines.reduce((s,l)=>s+l.total,0);
+  }
   lastTicket={lines,m:{budget,spent,leftover:budget-spent,
-    annualDiv:lines.reduce((s,l)=>s+l.qty*(l.dpa||0),0),split,mode}};
+    annualDiv:lines.reduce((s,l)=>s+l.qty*(l.dpa||0),0),split,mode:maxAssets<Infinity?'concentrar':mode}};
   renderTicket(lastTicket.lines,lastTicket.m);
 }
 function renderTicket(lines,m){
