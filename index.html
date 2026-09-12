@@ -929,6 +929,19 @@ function merged(d){
 }
 const clean=o=>{const r={};for(const [k,v] of Object.entries(o))if(v!=null&&v!==''&&!(typeof v==='number'&&isNaN(v)))r[k]=v;return r;};
 
+/* média anual dos últimos 3 anos de proventos — suaviza um ano atípico (extraordinário/amortização)
+   que uma janela de 12m sozinha levaria cru pro preço-teto. Divide pelos anos de histórico
+   realmente cobertos (mín. 1, máx. 3) pra não subestimar ativo com IPO recente. */
+function dpaMedia3a(rows){
+  if(!rows||!rows.length)return null;
+  const agora=Date.now(),cut=agora-3*365*864e5;
+  const validos=rows.filter(x=>{const t=new Date(x.date).getTime();return !isNaN(t)&&t>=cut;});
+  if(!validos.length)return null;
+  const soma=validos.reduce((a,x)=>a+x.val,0);if(soma<=0)return null;
+  const maisAntigo=Math.min(...validos.map(x=>new Date(x.date).getTime()));
+  const anos=Math.min(3,Math.max((agora-maisAntigo)/(365*864e5),1));
+  return soma/anos;
+}
 async function loadDivs(tk,years){
   const fii=isFiiTicker(tk);
   const d=await api(fii?`/fiis/${tk}/distributions?years=${years||5}`:`/dividends/${tk}?years=${years||5}`,{ttl:TTL.div});
@@ -942,7 +955,7 @@ async function loadDivs(tk,years){
     const s=rows.filter(x=>{const t=new Date(x.date).getTime();return !isNaN(t)&&t>=cut;}).reduce((a,x)=>a+x.val,0);
     total=s>0?s:null;
   }
-  return {rows,total,dy:ppct(top,F.dy)};
+  return {rows,total,dpa3a:dpaMedia3a(rows),dy:ppct(top,F.dy)};
 }
 /* Um ativo custa de 2 a 3 requisições. O cache longo (12h fundamentos, 24h proventos)
    é o que mantém o plano grátis viável com uma lista de 10-20 tickers. */
@@ -963,15 +976,18 @@ async function loadAsset(tk,{divs=true,force=false}={}){
         a.fundAt=pstr(o,F.date)||a.fundAt;}
     catch(e){notes.push('Fundamentos: '+e.message);}
   }
-  if(divs&&!(a.dpa>0)){
+  if(divs&&!(a.dpaBazin>0)){
     try{const dv=await loadDivs(tk);
         if(dv.total>0)a.dpa=dv.total;
         if(a.dy==null&&dv.dy!=null)a.dy=dv.dy;
-        a.divRows=dv.rows.slice(0,24);}
+        a.divRows=dv.rows.slice(0,24);
+        a.dpaBazin=dv.dpa3a>0?dv.dpa3a:(dv.total>0?dv.total:null);}
     catch(e){notes.push('Proventos: '+e.message);}
   }
   if(!(a.dpa>0)&&a.dy>0&&a.price>0)a.dpa=a.dy/100*a.price;
   if(a.dy==null&&a.dpa>0&&a.price>0)a.dy=a.dpa/a.price*100;
+  /* teto de Bazin sempre parte da média de 3 anos quando dá; sem histórico, cai pro DPA 12m */
+  if(!(a.dpaBazin>0))a.dpaBazin=a.dpa>0?a.dpa:0;
   a.graham=grahamOf(a.price,a.pl,a.pvp,a.eps,a.bvps);
   a.loadedAt=Date.now();a.notes=notes;
   S.assets[tk]=a;save();renderCache();
@@ -993,7 +1009,7 @@ function effTarget(w){
   if(w.target>0)return w.target;
   const a=A(w.tk);
   if(w.bkt==='vl'&&a.graham>0)return a.graham;
-  const dpa=w.dpa>0?w.dpa:(a.dpa||0);
+  const dpa=w.dpa>0?w.dpa:(a.dpaBazin>0?a.dpaBazin:(a.dpa||0));
   return bazinTarget(dpa)||0;
 }
 function dyOf(w){const a=A(w.tk);if(w.dpa>0&&a.price>0)return w.dpa/a.price*100;return a.dy??null;}
@@ -1033,13 +1049,19 @@ async function screenerRows(kind){
 }
 function rankScan(all){
   const c=S.cfg,minRoe=+c.minRoe,maxDebt=+c.maxDebt,minM=+c.minMargin,maxPl=+c.maxPl;
-  /* dado ausente não desqualifica — só reprova quando o número existe e fura o critério */
+  /* dado ausente não desqualifica — só reprova quando o número existe e fura o critério.
+     dívida/PL negativa e VPA negativo são a mesma armadilha: patrimônio líquido negativo
+     (empresa tecnicamente insolvente) deixa a dívida "parecer" ótima e o ROE inflado —
+     tratamos como reprovação, não como aprovação por sorte de sinal. */
   const q=all.filter(m=>m.price>0).filter(passaQualidade)
-    .filter(m=>(m.roe==null||m.roe>=minRoe)&&(m.debt==null||m.debt<=maxDebt)&&(m.marg==null||minM<=0||m.marg>=minM));
+    .filter(m=>(m.roe==null||m.roe>=minRoe)&&(m.debt==null||(m.debt>=0&&m.debt<=maxDebt))
+      &&(m.marg==null||minM<=0||m.marg>=minM)&&(m.bvps==null||m.bvps>0));
   const renda=q.filter(m=>m.dy!=null&&m.dy>=+c.minDy)
     .sort((a,b)=>(b.dy-a.dy)||((a.pvp??9)-(b.pvp??9))).slice(0,15);
-  let val=q;
-  if(+c.profit===1)val=val.filter(m=>m.pl!=null&&m.pl>0&&m.pl<=maxPl);
+  /* teto de P/L é regra própria — nunca deve depender do toggle "só lucrativa".
+     P/L negativo é prejuízo, não é "barata": fica de fora mesmo com o toggle desligado. */
+  let val=q.filter(m=>m.pl==null||(m.pl>0&&m.pl<=maxPl));
+  if(+c.profit===1)val=val.filter(m=>m.pl!=null&&m.pl>0);
   val=val.map(m=>{
     let s=0,w=0;
     if(m.pl>0){s+=Math.max(0,(maxPl-m.pl)/maxPl)*0.30;w+=0.30;}
@@ -1109,9 +1131,11 @@ function renderScanAll(){
 }
 function renderScan(){
   if(!S.scan.at){$('#scanStatus').textContent='Ainda não escaneado.';return;}
+  /* re-higieniza em cada render: pega listas já salvas no localStorage antes de regras novas existirem */
+  const renda=(S.scan.renda||[]).filter(passaQualidade),valor=(S.scan.valor||[]).filter(passaQualidade);
   $('#scanStatus').textContent=`${(S.scan.all||[]).length} ativos · atualizado ${fmtAgo(S.scan.at)}.`;
   $('#scanRendaCard').style.display='block';$('#scanValorCard').style.display='block';
-  $('#scanRendaBody').innerHTML=S.scan.renda.map((m,i)=>{
+  $('#scanRendaBody').innerHTML=renda.map((m,i)=>{
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
       <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
@@ -1120,7 +1144,7 @@ function renderScan(){
       <td>${tgt?brl(tgt):'—'}</td><td>${badge(st)}</td>
       <td style="text-align:right"><button class="icobtn" onclick="event.stopPropagation();toRadar('${m.tk}','rp')" title="Adicionar à minha lista">＋</button></td>
     </tr>`;}).join('')||`<tr><td colspan="11" style="text-align:center;color:var(--muted);font-family:Inter">Nada com DY ≥ ${S.cfg.minDy}% dentro do filtro de qualidade. Ajuste DY mínimo, ROE ou dívida/PL em Config — o painel refiltra sem gastar requisição.</td></tr>`;
-  $('#scanValorBody').innerHTML=S.scan.valor.map((m,i)=>{
+  $('#scanValorBody').innerHTML=valor.map((m,i)=>{
     const st=statusFrom(m.price,m.graham);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
       <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
@@ -1199,10 +1223,12 @@ function populateSegments(){
 }
 function renderFiis(){
   if(!S.fii.at){$('#fiiResultsCard').style.display='none';return;}
-  $('#fiiStatus').textContent=`${S.fii.list.length} FIIs · atualizado ${fmtAgo(S.fii.at)}.`;
+  /* re-higieniza em cada render: pega listas já salvas no localStorage antes de regras novas existirem */
+  const limpo=(S.fii.list||[]).filter(passaQualidade);
+  $('#fiiStatus').textContent=`${limpo.length} FIIs · atualizado ${fmtAgo(S.fii.at)}.`;
   const q=($('#fiiSearch').value||'').trim().toUpperCase();
-  const rows=S.fii.list.filter(x=>!q||x.tk.includes(q)).slice(0,120);
-  $('#fiiResultsTitle').textContent=q?`Resultado para "${q}" (${rows.length})`:`Ranking do filtro (${rows.length} de ${S.fii.list.length})`;
+  const rows=limpo.filter(x=>!q||x.tk.includes(q)).slice(0,120);
+  $('#fiiResultsTitle').textContent=q?`Resultado para "${q}" (${rows.length})`:`Ranking do filtro (${rows.length} de ${limpo.length})`;
   $('#fiiBody').innerHTML=rows.map(m=>{
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     const pvpCls=m.pvp==null?'':(m.pvp<=+S.cfg.fiiMaxPvp?'up-pos':'up-neg');
@@ -1256,7 +1282,8 @@ function kvBox(pairs){
 function renderDetail(){
   const area=$('#detArea');if(!D.a){area.innerHTML='';return;}
   const a=D.a,fii=a.kind==='fii';
-  const tgt=fii?bazinTarget(a.dpa):(a.graham||bazinTarget(a.dpa));
+  const dpaB=a.dpaBazin>0?a.dpaBazin:a.dpa;
+  const tgt=fii?bazinTarget(dpaB):(a.graham||bazinTarget(dpaB));
   const st=statusFrom(a.price,tgt);
   const chips=[fii?'FII':'Ação',a.sector||a.seg,a.ftype,a.mandate,a.mgmt].filter(Boolean)
     .map(c=>`<span class="chip">${esc(c)}</span>`).join('');
@@ -1271,8 +1298,9 @@ function renderDetail(){
     ${kvBox([
       ['DY 12m',p1(a.dy),a.dy>0?'pos':''],
       ['DPA 12m',brl(a.dpa>0?a.dpa:null)],
+      ['DPA base do Bazin (méd. 3a)',brl(dpaB>0?dpaB:null)],
       [rateRef()?`DY − ${rateRef().name}`:'DY − juros',vsCell(a.dy)],
-      ['Teto Bazin ('+n1(S.cfg.bazin)+'%)',brl(bazinTarget(a.dpa))],
+      ['Teto Bazin ('+n1(S.cfg.bazin)+'%)',brl(bazinTarget(dpaB))],
       fii?null:['Preço de Graham',brl(a.graham)],
       ['Status',badge(st)],
       ['Margem p/ o alvo',st.margin==null?'—':pct(st.margin)],
@@ -1502,23 +1530,33 @@ function candidates(bkt){
   const addManual=()=>S.watch.filter(w=>w.bkt===bkt).forEach(w=>{
     const a=A(w.tk);if(!(a.price>0))return;
     out[w.tk]={tk:w.tk,nm:w.nm||a.nm||'',bkt,price:a.price,target:effTarget(w),
-      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,kind:a.kind||'stock',src:'manual'};});
+      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,roe:a.roe,marg:a.marg,debt:a.debt,bvps:a.bvps,vol:a.vol,
+      kind:a.kind||'stock',src:'manual'};});
   const addScan=()=>{
     (bkt==='rp'?(S.scan.renda||[]):(S.scan.valor||[])).forEach(m=>{
       if(out[m.tk])return;
       out[m.tk]={tk:m.tk,nm:m.nm||m.sector||'',bkt,price:m.price,
         target:bkt==='vl'?(m.graham||0):(bazinTarget(m.dpa)||0),
-        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,score:m.vscore||0,kind:'stock',src:'scanner'};});
+        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,roe:m.roe,marg:m.marg,debt:m.debt,bvps:m.bvps,vol:m.vol,
+        score:m.vscore||0,kind:'stock',src:'scanner'};});
     /* FIIs entram no bucket de renda — é o que eles são */
     if(bkt==='rp'){
       (S.fii.list||[]).filter(x=>x.price>0&&x.dy!=null&&(x.pvp==null||x.pvp<=+S.cfg.fiiMaxPvp))
         .sort((a,b)=>b.dy-a.dy).slice(0,10).forEach(m=>{if(out[m.tk])return;
           out[m.tk]={tk:m.tk,nm:m.seg||m.ftype||'',bkt:'rp',price:m.price,target:bazinTarget(m.dpa)||0,
-            dpa:m.dpa||0,dy:m.dy,pl:null,pvp:m.pvp,kind:'fii',src:'scanner'};});
+            dpa:m.dpa||0,dy:m.dy,pl:null,pvp:m.pvp,vol:m.vol,kind:'fii',src:'scanner'};});
     }
   };
   if(src==='manual')addManual();else if(src==='scanner')addScan();else{addManual();addScan();}
-  return Object.values(out).filter(c=>c.price>0).filter(passaQualidade);
+  /* os "Parâmetros de decisão" de Config valem para qualquer origem — a watchlist manual
+     não é isenção de qualidade, senão MGLU3 (P/L acima do teto) entra pela lista e ignora o filtro */
+  const passa=c=>passaQualidade(c)
+    &&(c.roe==null||c.roe>=+S.cfg.minRoe)
+    &&(c.debt==null||(c.debt>=0&&c.debt<=+S.cfg.maxDebt))
+    &&(c.marg==null||+S.cfg.minMargin<=0||c.marg>=+S.cfg.minMargin)
+    &&(c.bvps==null||c.bvps>0)
+    &&(bkt!=='vl'||c.pl==null||(c.pl>0&&c.pl<=+S.cfg.maxPl));
+  return Object.values(out).filter(c=>c.price>0).filter(passa);
 }
 function rankBucket(items,bkt){
   if(!items.length)return [];
@@ -1583,7 +1621,7 @@ function runAllocator(){
   if(maxAssets<Infinity){
     const r=allocateLowBudget(budget,maxAssets);
     lines=r.lines;spent=r.spent;
-    toast(`Aporte de ${brl(budget)}: trava de pulverização limita a ${maxAssets} ativo(s).`);
+    toast(`Saldo baixo (${brl(budget)}) para diversificação ampla. Modo Concentrar forçado em ${maxAssets} ativo(s).`);
   }else{
     const aRP=allocateBucket(budget*split,'rp',mode,4);
     const aVL=allocateBucket(budget*(1-split),'vl',mode,3);
@@ -1625,7 +1663,7 @@ function renderTicket(lines,m){
     </div></div>
     <div class="row-end" style="margin-top:12px"><button class="btn ghost sm" id="ticketCopy">Copiar ordem</button>
       <button class="btn ghost sm" id="ticketCsv">↓ CSV</button></div>
-    <p class="hint" style="margin-top:10px">DY e DPA vêm dos proventos da Bolsai (ou do DPA que você lançou). Alvo de renda = teto de Bazin; alvo de valor = preço de Graham. ${r?'':'Atualize a aba <b>Macro</b> para comparar o yield com a renda fixa.'}</p>`;
+    <p class="hint" style="margin-top:10px">DY e DPA vêm dos proventos da Bolsai (ou do DPA que você lançou). Alvo de renda = teto de Bazin (DPA médio dos últimos 3 anos, ou 12m se o histórico for curto); alvo de valor = preço de Graham. ${r?'':'Atualize a aba <b>Macro</b> para comparar o yield com a renda fixa.'}</p>`;
   $('#ticketCopy').onclick=()=>{
     const txt=['ORDEM DE COMPRA — JMG Investimentos',new Date().toLocaleString('pt-BR'),'',
       ...lines.map(l=>`${l.tk}  ${l.qty} x ${brl(l.price)} = ${brl(l.total)}`),'',
