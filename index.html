@@ -1045,7 +1045,10 @@ function screenerQS(kind){
 }
 async function screenerRows(kind){
   const d=await api('/screener/?'+screenerQS(kind),{ttl:TTL.screen});
-  return rowsOf(d).map(normStock).filter(m=>m.tk);
+  /* merged() achata um objeto de cotação aninhado (ex.: {ticker,...,quote:{price,close}})
+     antes do normStock ler o preço — sem isso, "quote" (candidato de F.price) captura o
+     objeto inteiro em vez do número, e pnum() joga isso fora como preço nulo em toda a lista */
+  return rowsOf(d).map(o=>normStock(merged(o))).filter(m=>m.tk);
 }
 function rankScan(all){
   const c=S.cfg,minRoe=+c.minRoe,maxDebt=+c.maxDebt,minM=+c.minMargin,maxPl=+c.maxPl;
@@ -1185,7 +1188,7 @@ async function loadFiis(){
   try{
     const d=await api('/fiis/screener?'+fiiQS(),{ttl:TTL.fii});
     setBar(80);
-    const todos=rowsOf(d).map(normFii).filter(x=>x.tk);
+    const todos=rowsOf(d).map(o=>normFii(merged(o))).filter(x=>x.tk);
     /* segmentos saem da lista inteira, não da filtrada, senão o seletor encolhe a cada busca */
     const segs=[...new Set(todos.map(x=>x.seg).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
     const list=ordenaFiis(filtraFiis(todos));
