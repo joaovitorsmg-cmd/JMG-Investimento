@@ -81,7 +81,10 @@ jobs:
 
       - name: Buscar dados na Bolsai
         id: snapshot
-        if: steps.feriado.outputs.skip != 'true'
+        # só consulta a Bolsai na rodada agendada das 23h ou quando disparada manualmente;
+        # um push em main (merge de PR) só republica o site com o snapshot já em cache,
+        # sem gastar cota — evita queimar requisições toda vez que mesclamos uma correção
+        if: steps.feriado.outputs.skip != 'true' && github.event_name != 'push'
         continue-on-error: true
         env:
           BOLSAI_API_KEY: ${{ secrets.BOLSAI_API_KEY }}

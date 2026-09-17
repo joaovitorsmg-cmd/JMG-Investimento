@@ -105,6 +105,8 @@ tr:hover td{background:#FAFCFA}
 .b-barato{background:#E4F1E8;color:var(--leaf-d)}.b-justo{background:#F1F3EE;color:var(--muted)}
 .b-caro{background:#F7E4DC;color:var(--rust)}.b-na{background:#F1F3EE;color:#9aa69e}
 .up-pos{color:var(--leaf-d);font-weight:600}.up-neg{color:var(--rust);font-weight:600}
+.diag{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px;margin:3px 4px 0 0;line-height:1.5}
+.diag-alerta{background:#FBEADB;color:var(--clay)}.diag-info{background:#EEF0EC;color:var(--muted)}.diag-ok{background:var(--chip);color:var(--leaf-d)}
 .icobtn{background:none;border:none;cursor:pointer;color:var(--muted);font-size:15px;padding:4px 6px;border-radius:6px}
 .icobtn:hover{background:#eef2ed;color:var(--ink)}
 .add-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;align-items:end}
@@ -737,7 +739,7 @@ const F={
   hi52:['high_52w','fifty_two_week_high','week_52_high','high_52_weeks','max_52w','high52','week52_high'],
   lo52:['low_52w','fifty_two_week_low','week_52_low','low_52_weeks','min_52w','low52','week52_low'],
   ytd:['ytd_return','ytd_return_pct','ytd','return_ytd','ytd_change','ytd_pct'],
-  avgVol:['avg_volume','average_volume','avg_volume_30d','volume_avg','avg_traded_amount'],
+  avgVol:['avg_volume_52w','avg_volume','average_volume','avg_volume_30d','volume_avg','avg_traded_amount'],
   vol:['volume','adjusted_volume','traded_amount'],
   nav:['nav_per_share','nav_share','nav','vpa','book_value_per_share','equity_per_share'],
   navTot:['net_asset_value','nav_total','total_nav','net_worth','equity','total_equity'],
@@ -881,7 +883,16 @@ const vsCell=dy=>{const d=vsRate(dy);return d==null?'—':`<span class="${d>=0?'
 const MIN_LIQ_DIARIA=1e6;
 /* DY acima disso é quase sempre amortização de capital ou erro de API, não dividendo recorrente */
 const MAX_DY_ANUAL=20;
-const passaQualidade=m=>(m.vol==null||m.vol>=MIN_LIQ_DIARIA)&&(m.dy==null||m.dy<=MAX_DY_ANUAL);
+/* o screener em massa da Bolsai não manda volume nenhuma linha — só a ficha por
+   ticker (raio-X) tem avg_volume_52w, e só pra quem entrou no raio-X. Sem isso,
+   MIN_LIQ_DIARIA nunca reprova nada sozinho; valor de mercado é o proxy que
+   sobra pra pegar nano-caps tipo HAGA4 (R$20mi) sem gastar requisição extra */
+const MIN_MCAP=3e8;
+/* P/L pertinho de zero quase sempre é ganho não-recorrente (venda de ativo,
+   crédito tributário) inflando o lucro de 12m, não a empresa ficando barata */
+const MIN_PL_VALOR=3;
+const passaQualidade=m=>(m.vol==null||m.vol>=MIN_LIQ_DIARIA)&&(m.dy==null||m.dy<=MAX_DY_ANUAL)
+  &&(m.mcap==null||m.mcap>=MIN_MCAP);
 
 /* ---------- alvos e status ---------- */
 const bazinTarget=dpa=>(dpa>0&&S.cfg.bazin>0)?dpa/(S.cfg.bazin/100):null;
@@ -893,6 +904,19 @@ function statusFrom(price,target){
   return {cls:'b-justo',txt:'No preço',margin:m};
 }
 const badge=st=>`<span class="badge ${st.cls}">${st.txt}</span>`;
+/* ---------- diagnóstico por ativo: o painel explica o que pesou na conta, não só filtra calado ---------- */
+function diagnostico(m){
+  const d=[],maxDebt=+S.cfg.maxDebt;
+  if(m.dy!=null&&m.dy>=15)d.push(['alerta','Yield turbinado — confira se é recorrente']);
+  if(m.debt!=null&&maxDebt>0&&m.debt>=maxDebt*0.8)d.push(['alerta','Dívida perto do teto']);
+  if(m.roe!=null&&m.roe>=80)d.push(['alerta','ROE fora da curva — confira o motivo']);
+  if(m.kind==='fii'&&m.pvp!=null&&m.pvp>0&&m.pvp<0.6)d.push(['alerta','Desconto profundo — confira liquidez do fundo']);
+  if(m.mcap!=null&&m.mcap<2e9)d.push(['info','Small cap — mais volátil']);
+  if(!d.length&&m.roe!=null&&m.roe>=15&&m.roe<80&&m.debt!=null&&maxDebt>0&&m.debt<maxDebt*0.5&&m.marg!=null&&m.marg>=15)
+    d.push(['ok','Fundamentos consistentes']);
+  return d.slice(0,2);
+}
+const diagChips=m=>diagnostico(m).map(([t,txt])=>`<span class="diag diag-${t}">${esc(txt)}</span>`).join('');
 function csvDown(name,rows){
   const body=rows.map(r=>r.map(c=>{
     const s=c==null?'':(typeof c==='number'?(isNaN(c)?'':String(c).replace('.',',')):String(c));
@@ -1061,9 +1085,11 @@ function rankScan(all){
       &&(m.marg==null||minM<=0||m.marg>=minM)&&(m.bvps==null||m.bvps>0));
   const renda=q.filter(m=>m.dy!=null&&m.dy>=+c.minDy)
     .sort((a,b)=>(b.dy-a.dy)||((a.pvp??9)-(b.pvp??9))).slice(0,15);
-  /* teto de P/L é regra própria — nunca deve depender do toggle "só lucrativa".
-     P/L negativo é prejuízo, não é "barata": fica de fora mesmo com o toggle desligado. */
-  let val=q.filter(m=>m.pl==null||(m.pl>0&&m.pl<=maxPl));
+  /* teto e piso de P/L são regra própria — nunca devem depender do toggle "só lucrativa".
+     P/L negativo é prejuízo; P/L colado em zero é quase sempre ganho não-recorrente
+     inflando o lucro de 12m (ex.: HAGA4 P/L 0,24, EQPA3 P/L 0,64) — nem um nem outro
+     é "barata" de verdade, ficam de fora mesmo com o toggle desligado. */
+  let val=q.filter(m=>m.pl==null||(m.pl>=MIN_PL_VALOR&&m.pl<=maxPl));
   if(+c.profit===1)val=val.filter(m=>m.pl!=null&&m.pl>0);
   val=val.map(m=>{
     let s=0,w=0;
@@ -1141,7 +1167,7 @@ function renderScan(){
   $('#scanRendaBody').innerHTML=renda.map((m,i)=>{
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
+      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td class="up-pos">${p1(m.dy)}</td><td>${vsCell(m.dy)}</td>
       <td>${n2(m.pvp)}</td><td>${n2(m.pl)}</td><td>${n1(m.roe)}</td><td>${n2(m.debt)}</td>
       <td>${tgt?brl(tgt):'—'}</td><td>${badge(st)}</td>
@@ -1150,7 +1176,7 @@ function renderScan(){
   $('#scanValorBody').innerHTML=valor.map((m,i)=>{
     const st=statusFrom(m.price,m.graham);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
+      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td>${n2(m.pl)}</td><td>${n2(m.pvp)}</td>
       <td>${n1(m.roe)}</td><td>${n1(m.marg)}</td><td>${n2(m.debt)}</td>
       <td>${m.graham?brl(m.graham):'—'}</td><td>${badge(st)}</td>
@@ -1236,7 +1262,7 @@ function renderFiis(){
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     const pvpCls=m.pvp==null?'':(m.pvp<=+S.cfg.fiiMaxPvp?'up-pos':'up-neg');
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk">${esc(m.tk)}<span class="nm">${esc(m.ftype||m.nm||'')}</span></td>
+      <td class="tk">${esc(m.tk)}<span class="nm">${esc(m.ftype||m.nm||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td class="up-pos">${p1(m.dy)}</td><td>${vsCell(m.dy)}</td>
       <td class="${pvpCls}" title="Referência: até ${n2(S.cfg.fiiMaxPvp)} — alerta visual, não filtra">${n2(m.pvp)}</td>
       <td>${brl(m.nav)}</td><td>${m.vac==null?'—':n1(m.vac)+'%'}</td>
@@ -1533,14 +1559,14 @@ function candidates(bkt){
   const addManual=()=>S.watch.filter(w=>w.bkt===bkt).forEach(w=>{
     const a=A(w.tk);if(!(a.price>0))return;
     out[w.tk]={tk:w.tk,nm:w.nm||a.nm||'',bkt,price:a.price,target:effTarget(w),
-      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,roe:a.roe,marg:a.marg,debt:a.debt,bvps:a.bvps,vol:a.vol,
+      dpa:w.dpa>0?w.dpa:(a.dpa||0),dy:dyOf(w),pl:a.pl,pvp:a.pvp,roe:a.roe,marg:a.marg,debt:a.debt,bvps:a.bvps,vol:a.vol,mcap:a.mcap,
       kind:a.kind||'stock',src:'manual'};});
   const addScan=()=>{
     (bkt==='rp'?(S.scan.renda||[]):(S.scan.valor||[])).forEach(m=>{
       if(out[m.tk])return;
       out[m.tk]={tk:m.tk,nm:m.nm||m.sector||'',bkt,price:m.price,
         target:bkt==='vl'?(m.graham||0):(bazinTarget(m.dpa)||0),
-        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,roe:m.roe,marg:m.marg,debt:m.debt,bvps:m.bvps,vol:m.vol,
+        dpa:m.dpa||0,dy:m.dy,pl:m.pl,pvp:m.pvp,roe:m.roe,marg:m.marg,debt:m.debt,bvps:m.bvps,vol:m.vol,mcap:m.mcap,
         score:m.vscore||0,kind:'stock',src:'scanner'};});
     /* FIIs entram no bucket de renda — é o que eles são */
     if(bkt==='rp'){
@@ -1558,7 +1584,7 @@ function candidates(bkt){
     &&(c.debt==null||(c.debt>=0&&c.debt<=+S.cfg.maxDebt))
     &&(c.marg==null||+S.cfg.minMargin<=0||c.marg>=+S.cfg.minMargin)
     &&(c.bvps==null||c.bvps>0)
-    &&(bkt!=='vl'||c.pl==null||(c.pl>0&&c.pl<=+S.cfg.maxPl));
+    &&(bkt!=='vl'||c.pl==null||(c.pl>=MIN_PL_VALOR&&c.pl<=+S.cfg.maxPl));
   return Object.values(out).filter(c=>c.price>0).filter(passa);
 }
 function rankBucket(items,bkt){
@@ -1571,25 +1597,36 @@ function rankBucket(items,bkt){
   return withM.sort((a,b)=>b.score-a.score);
 }
 const roundQty=q=>{const l=+S.cfg.lot;return l>1?Math.floor(q/l)*l:Math.floor(q);};
-const mkLine=(x,q)=>({tk:x.tk,nm:x.nm,bkt:x.bkt,kind:x.kind,price:x.price,qty:q,total:q*x.price,dpa:x.dpa||0,dy:x.dy,pl:x.pl,src:x.src});
+const mkLine=(x,q)=>({tk:x.tk,nm:x.nm,bkt:x.bkt,kind:x.kind,price:x.price,qty:q,total:q*x.price,dpa:x.dpa||0,dy:x.dy,pl:x.pl,
+  pvp:x.pvp,roe:x.roe,marg:x.marg,debt:x.debt,mcap:x.mcap,bvps:x.bvps,src:x.src});
+/* trava de concentração: nem "Concentrar" deveria virar 100% num ativo só quando
+   existe mais de um candidato de verdade (ex.: AAZQ11 tomando a ordem inteira).
+   Some quando só sobrou 1 candidato viável, ou no aporte baixo — lá concentrar
+   tudo é a intenção (ver allocateLowBudget). */
+const CONC_CAP=0.30;
 function allocateBucket(budget,bkt,mode,slots){
   let ranked=rankBucket(candidates(bkt),bkt);
   if(+S.cfg.below===1)ranked=ranked.filter(x=>!x.target||x.margin>=0);
   if(!ranked.length||budget<=0)return {lines:[],spent:0};
   const lines=[];let spent=0;
   const pick=mode==='concentrar'?ranked.slice(0,2):ranked.slice(0,slots);
+  const tetoLinha=(mode==='concentrar'&&pick.length>1)?budget*CONC_CAP:Infinity;
   if(mode==='diversificar'){
     const sum=pick.reduce((s,x)=>s+Math.max(x.score,0.01),0);
     pick.forEach(x=>{const a=budget*(Math.max(x.score,0.01)/sum);const q=roundQty(a/x.price);
       if(q>0){lines.push(mkLine(x,q));spent+=q*x.price;}});
   }else{
-    for(const x of pick){const q=roundQty((budget-spent)/x.price);if(q>0){lines.push(mkLine(x,q));spent+=q*x.price;}}
+    for(const x of pick){const disp=Math.min(budget-spent,tetoLinha);const q=roundQty(disp/x.price);
+      if(q>0){lines.push(mkLine(x,q));spent+=q*x.price;}}
   }
-  /* sobra: completa com lotes inteiros enquanto couber */
+  /* sobra: completa com lotes inteiros enquanto couber — respeitando o teto por
+     linha no Concentrar, o que naturalmente espalha o resto pro 3º/4º da fila
+     em vez de empilhar tudo nos 2 primeiros */
   let pass=0;
   while(pass<6){let done=true;
     for(const x of ranked){const l=+S.cfg.lot,cost=x.price*l;
-      if(budget-spent>=cost){const ln=lines.find(z=>z.tk===x.tk);
+      const ln=lines.find(z=>z.tk===x.tk);
+      if(budget-spent>=cost&&(ln?ln.total:0)+cost<=tetoLinha){
         if(ln){ln.qty+=l;ln.total+=cost;}else lines.push(mkLine(x,l));spent+=cost;done=false;}}
     if(done)break;pass++;}
   return {lines,spent};
@@ -1650,8 +1687,9 @@ function renderTicket(lines,m){
     const w=m.spent>0?(l.total/m.spent*100):0;
     const meta=[l.dy!=null?`DY ${n1(l.dy)}%`:null,l.pl!=null?`P/L ${n2(l.pl)}`:null,
       l.dpa>0?`DPA ${brl(l.dpa)}`:null].filter(Boolean).join(' · ');
+    const chips=diagChips(l)+(w>25&&lines.length>1?'<span class="diag diag-alerta">Concentração alta nesta ordem</span>':'');
     return `<div class="ord-line"><div><span class="ol-tk">${esc(l.tk)}</span>${chip}
-      <div class="ol-nm">${esc(l.nm||'')}</div>${meta?`<div class="ol-meta">${meta}</div>`:''}</div>
+      <div class="ol-nm">${esc(l.nm||'')}</div>${meta?`<div class="ol-meta">${meta}</div>`:''}${chips?`<div>${chips}</div>`:''}</div>
       <div class="ol-q">${l.qty} × ${brl(l.price)}<small>${brl(l.total)} · ${w.toFixed(0)}%</small></div></div>`;}).join('');
   area.innerHTML=`<div class="ticket">
     <div class="ticket-top"><span class="t">📄 Ordem de compra</span>
