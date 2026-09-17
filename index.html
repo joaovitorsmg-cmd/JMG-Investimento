@@ -105,6 +105,8 @@ tr:hover td{background:#FAFCFA}
 .b-barato{background:#E4F1E8;color:var(--leaf-d)}.b-justo{background:#F1F3EE;color:var(--muted)}
 .b-caro{background:#F7E4DC;color:var(--rust)}.b-na{background:#F1F3EE;color:#9aa69e}
 .up-pos{color:var(--leaf-d);font-weight:600}.up-neg{color:var(--rust);font-weight:600}
+.diag{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px;margin:3px 4px 0 0;line-height:1.5}
+.diag-alerta{background:#FBEADB;color:var(--clay)}.diag-info{background:#EEF0EC;color:var(--muted)}.diag-ok{background:var(--chip);color:var(--leaf-d)}
 .icobtn{background:none;border:none;cursor:pointer;color:var(--muted);font-size:15px;padding:4px 6px;border-radius:6px}
 .icobtn:hover{background:#eef2ed;color:var(--ink)}
 .add-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;align-items:end}
@@ -902,6 +904,19 @@ function statusFrom(price,target){
   return {cls:'b-justo',txt:'No preço',margin:m};
 }
 const badge=st=>`<span class="badge ${st.cls}">${st.txt}</span>`;
+/* ---------- diagnóstico por ativo: o painel explica o que pesou na conta, não só filtra calado ---------- */
+function diagnostico(m){
+  const d=[],maxDebt=+S.cfg.maxDebt;
+  if(m.dy!=null&&m.dy>=15)d.push(['alerta','Yield turbinado — confira se é recorrente']);
+  if(m.debt!=null&&maxDebt>0&&m.debt>=maxDebt*0.8)d.push(['alerta','Dívida perto do teto']);
+  if(m.roe!=null&&m.roe>=80)d.push(['alerta','ROE fora da curva — confira o motivo']);
+  if(m.kind==='fii'&&m.pvp!=null&&m.pvp>0&&m.pvp<0.6)d.push(['alerta','Desconto profundo — confira liquidez do fundo']);
+  if(m.mcap!=null&&m.mcap<2e9)d.push(['info','Small cap — mais volátil']);
+  if(!d.length&&m.roe!=null&&m.roe>=15&&m.roe<80&&m.debt!=null&&maxDebt>0&&m.debt<maxDebt*0.5&&m.marg!=null&&m.marg>=15)
+    d.push(['ok','Fundamentos consistentes']);
+  return d.slice(0,2);
+}
+const diagChips=m=>diagnostico(m).map(([t,txt])=>`<span class="diag diag-${t}">${esc(txt)}</span>`).join('');
 function csvDown(name,rows){
   const body=rows.map(r=>r.map(c=>{
     const s=c==null?'':(typeof c==='number'?(isNaN(c)?'':String(c).replace('.',',')):String(c));
@@ -1152,7 +1167,7 @@ function renderScan(){
   $('#scanRendaBody').innerHTML=renda.map((m,i)=>{
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
+      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td class="up-pos">${p1(m.dy)}</td><td>${vsCell(m.dy)}</td>
       <td>${n2(m.pvp)}</td><td>${n2(m.pl)}</td><td>${n1(m.roe)}</td><td>${n2(m.debt)}</td>
       <td>${tgt?brl(tgt):'—'}</td><td>${badge(st)}</td>
@@ -1161,7 +1176,7 @@ function renderScan(){
   $('#scanValorBody').innerHTML=valor.map((m,i)=>{
     const st=statusFrom(m.price,m.graham);
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span></td>
+      <td class="tk"><span class="rank-n">${i+1}</span>${esc(m.tk)}<span class="nm">${esc(m.nm||m.sector||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td>${n2(m.pl)}</td><td>${n2(m.pvp)}</td>
       <td>${n1(m.roe)}</td><td>${n1(m.marg)}</td><td>${n2(m.debt)}</td>
       <td>${m.graham?brl(m.graham):'—'}</td><td>${badge(st)}</td>
@@ -1247,7 +1262,7 @@ function renderFiis(){
     const tgt=bazinTarget(m.dpa);const st=statusFrom(m.price,tgt);
     const pvpCls=m.pvp==null?'':(m.pvp<=+S.cfg.fiiMaxPvp?'up-pos':'up-neg');
     return `<tr class="clickable" onclick="openAsset('${m.tk}')">
-      <td class="tk">${esc(m.tk)}<span class="nm">${esc(m.ftype||m.nm||'')}</span></td>
+      <td class="tk">${esc(m.tk)}<span class="nm">${esc(m.ftype||m.nm||'')}</span><br>${diagChips(m)}</td>
       <td>${brl(m.price)}</td><td class="up-pos">${p1(m.dy)}</td><td>${vsCell(m.dy)}</td>
       <td class="${pvpCls}" title="Referência: até ${n2(S.cfg.fiiMaxPvp)} — alerta visual, não filtra">${n2(m.pvp)}</td>
       <td>${brl(m.nav)}</td><td>${m.vac==null?'—':n1(m.vac)+'%'}</td>
@@ -1582,7 +1597,8 @@ function rankBucket(items,bkt){
   return withM.sort((a,b)=>b.score-a.score);
 }
 const roundQty=q=>{const l=+S.cfg.lot;return l>1?Math.floor(q/l)*l:Math.floor(q);};
-const mkLine=(x,q)=>({tk:x.tk,nm:x.nm,bkt:x.bkt,kind:x.kind,price:x.price,qty:q,total:q*x.price,dpa:x.dpa||0,dy:x.dy,pl:x.pl,src:x.src});
+const mkLine=(x,q)=>({tk:x.tk,nm:x.nm,bkt:x.bkt,kind:x.kind,price:x.price,qty:q,total:q*x.price,dpa:x.dpa||0,dy:x.dy,pl:x.pl,
+  pvp:x.pvp,roe:x.roe,marg:x.marg,debt:x.debt,mcap:x.mcap,bvps:x.bvps,src:x.src});
 /* trava de concentração: nem "Concentrar" deveria virar 100% num ativo só quando
    existe mais de um candidato de verdade (ex.: AAZQ11 tomando a ordem inteira).
    Some quando só sobrou 1 candidato viável, ou no aporte baixo — lá concentrar
@@ -1671,8 +1687,9 @@ function renderTicket(lines,m){
     const w=m.spent>0?(l.total/m.spent*100):0;
     const meta=[l.dy!=null?`DY ${n1(l.dy)}%`:null,l.pl!=null?`P/L ${n2(l.pl)}`:null,
       l.dpa>0?`DPA ${brl(l.dpa)}`:null].filter(Boolean).join(' · ');
+    const chips=diagChips(l)+(w>25&&lines.length>1?'<span class="diag diag-alerta">Concentração alta nesta ordem</span>':'');
     return `<div class="ord-line"><div><span class="ol-tk">${esc(l.tk)}</span>${chip}
-      <div class="ol-nm">${esc(l.nm||'')}</div>${meta?`<div class="ol-meta">${meta}</div>`:''}</div>
+      <div class="ol-nm">${esc(l.nm||'')}</div>${meta?`<div class="ol-meta">${meta}</div>`:''}${chips?`<div>${chips}</div>`:''}</div>
       <div class="ol-q">${l.qty} × ${brl(l.price)}<small>${brl(l.total)} · ${w.toFixed(0)}%</small></div></div>`;}).join('');
   area.innerHTML=`<div class="ticket">
     <div class="ticket-top"><span class="t">📄 Ordem de compra</span>
